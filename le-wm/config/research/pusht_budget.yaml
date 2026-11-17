@@ -1,0 +1,15 @@
+# Research defaults. These do not replace config/eval/pusht.yaml.
+env_name: swm/PushT-v1
+dataset: pusht_expert_train
+horizon: 5
+receding_horizon: 5
+action_block: 5
+eval_budget: 50
+goal_offset: 25
+warm_start: true
+img_size: 224
+
+# Change only these two fields between budget conditions.
+num_samples: 100
+iterations: 10
+topk: 10

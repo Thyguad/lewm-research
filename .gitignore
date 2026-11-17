@@ -1,0 +1,24 @@
+# Python and local tooling
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.ipynb_checkpoints/
+**/.venv/
+
+# Local experiment artifacts and downloaded runtime data
+**/runs/
+**/outputs/
+**/checkpoints/
+**/datasets/
+**/*.h5
+**/*.pt
+**/*.ckpt
+**/*.mp4
+**/*.npy
+**/*.npz
+**/.stable-wm/
+
+# Existing local reference artifact; keep it on disk without committing it.
+le-wm/arxiv_*.pdf
