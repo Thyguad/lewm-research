@@ -1,93 +1,151 @@
-# LeWM 冻结 PushT 研究工具
+# LeWM 冻结 PushT 规划诊断
 
-这组脚本只做冻结模型的规划、记录和离线诊断；不训练、不修改权重，也不改变官方 `config/eval/pusht.yaml` 的默认行为。当前代码只在源码层面完成，下面的服务器命令是待执行步骤，不能把静态检查当作实验结果。
+这组脚本冻结世界模型，只研究规划与诊断，不训练、不修改模型权重。正式实验在服务器执行。本次修复只做了源码检查、语法检查和不导入模型/仿真器的轻量契约测试；张量测试、PushT 回放、真实权重前向和实验结果仍待服务器验证。
 
-## 本地核查结果与调用链
+## 修复范围与协议
 
-本仓库当前分支为 `research/frozen-diagnostics`，HEAD 为 `8edfeb336732b5f3ce7b8b210d0ba370a09e2cac`，同级依赖仓库为本地 `../stable-worldmodel`，实际 HEAD 为 `21446f1ede6d5284e981bd7b47f432b994e6d812`，且该依赖工作树已有修改。它不是此前参考的 `464f97f51a287f4d16e0caad02e8a9fe87c3847c`；本阶段没有强制切换、覆盖或清理这些修改，服务器部署时必须把实际依赖提交和差异记录下来。没有发现项目内更深层的 `AGENTS.md`。依赖版本没有被脚本强制切换。
+- 显式 `world.set_policy(policy)`；修复 `configure` 的 NumPy 引用和 `torch.device` 同步。
+- warm start 保留剩余 `H-K` 个模型动作块，尾部补零至 H；`K=H` 的空余量也能开始下一次规划。
+- 配置优先级：代码默认值 < YAML < 显式 CLI；未知字段、非法参数、重复案例会报错。
+- 正式计时默认关闭诊断。`solver_seconds` 在正式模式覆盖整个求解过程，包括采样、模型评分、top-k、均值/标准差更新和结果转 CPU；不包含策略预处理、环境执行和后续日志写盘。`episode_seconds` 是整个上游评估调用的墙钟时间，不能当作求解延迟。首轮冷启动包含在计时内，没有暗中预热或扣除。
+- 诊断模式额外评分每轮**更新后的均值**，最终均值才是实际返回计划。候选评分、额外均值评分、快照写盘和离线真实回放分别计数/计时。诊断运行不用于正式耗时图。
+- RNG：所有设备统一使用独立的 CPU `torch.Generator` 采样，诊断候选采样使用另一个 NumPy RNG。它是明确的研究基线，**不是上游 CUDA CEM 的逐位复现声明**。默认固定 `topk=10`，仅改变 N 和 I；H、K、动作块和回合预算均固定。
+- `case_id` 由 episode/start/offset 决定；候选主键为 `(run_id, case_id, plan_id, iteration, candidate_id)`。每例/每次规划独立快照目录，禁止覆盖旧结果。
+- 结果目录有 `STATUS.json`：running / failed / complete。审计与绘图拒绝未完成、旧版 v1 或不兼容结果。旧结果缺少必要上下文，必须重新采集，不能靠改字段升级。
 
-在线路径是：`research_cem.py` → `stable_worldmodel.data.HDF5Dataset` → `World.evaluate_from_dataset` → `WorldModelPolicy.get_action` → `LoggingCEMSolver.solve` → 加载对象中的 `get_cost`。`load_pretrained`/`AutoCostModel` 可能返回 `stable_worldmodel.wm.lewm.lewm.LeWM`；脚本会打印实际模块类型和源码路径，不能只根据本仓库的 `jepa.py` 推断修改已生效。
-
-关键形状如下：PushT 图像经过 `HWC uint8 → CHW float32 → ImageNet Normalize → 224×224`；策略输入通常是 `(B, 1, C, H, W)`，CEM 候选是 `(B, N, H, action_dim*action_block)`，模型代价是 `(B, N)`，返回动作是 CEM 更新后的均值 `(B, H, action_dim*action_block)`。`WorldModelPolicy` 再把前 `receding_horizon` 个模型步展开成连续环境动作并反标准化。`CEMSolver` 的 `var` 更新使用 `std`；`costs` 是精英平均代价，不是返回均值的代价。研究求解器会额外评分返回均值并单独写入日志。
+调用链：`research_cem.py → World.evaluate_from_dataset → WorldModelPolicy → LoggingCEMSolver → 实际加载模型.get_cost`。当前实现针对仓库内的 `stable_worldmodel.wm.lewm.lewm.LeWM`。每次记录模型类型、权重/config SHA256、安装源码 SHA256、研究脚本 SHA256、依赖版本、设备与运算配置、数据集 SHA256 和实际使用的案例；不能仅根据顶层 `jepa.py` 推断运行代码。
 
 ## 文件
 
-* `research_common.py`：案例清单、运行元数据、冻结模型和设备同步辅助函数。
-* `research_cem.py`：`generate-cases` 固定案例；`run` 执行一个预算条件，记录逐回合结果、逐轮 CEM 日志和可选快照。
-* `research_diag.py`：读取快照并生成审计表与图。完整 `J_enc/J_task` 需要服务器上的真实 PushT 重放表；脚本不会把缺失值填成零。
-* `config/research/pusht_budget.yaml`：研究默认值；N 和 I 是唯一计划改变的预算字段，`topk` 需明确保持规则。
+| 文件 | 用途 |
+| --- | --- |
+| `research_common.py` | 清单、身份校验、状态文件和日志 |
+| `research_cem.py` | 固定案例、模型预检、正式收集与诊断收集 |
+| `research_runtime.py` | 权重/预处理、PushT 重建、状态校验和任务指标 |
+| `research_diag.py` | 候选回放审计、固定状态重规划、配对检查和绘图 |
+| `tests/test_research_contracts.py` | 不加载模型/仿真器的配置与数据契约测试 |
+| `tests/test_research_server.py` | 服务器张量回归测试，无需权重/数据 |
+| `tests/test_research_replay_server.py` | 服务器真实 PushT 回放测试，无需权重/数据 |
 
-## 服务器安装与目录
+## 服务器部署
 
-在两个仓库的父目录执行，使用与当前源码兼容的 Python 3.10/3.11 环境。不要在本地运行以下命令，也不要在服务器之外下载权重或数据。
+仓库本身包含 `le-wm/` 和 `stable-worldmodel/` 两个子目录，不需要另找同级 Git 仓库。下面从本仓库根目录开始，在服务器上执行。使用 Python 3.11；PyTorch/CUDA 构建需与服务器驱动相容。
 
 ```bash
 uv venv --python 3.11
 source .venv/bin/activate
 uv pip install torch torchvision
-uv pip install -e '../stable-worldmodel[train,env]'
-uv pip install stable-pretraining hydra-core scikit-learn pandas matplotlib pyyaml
-export PYTHONPATH="$PWD:$PYTHONPATH"  # le-wm 当前没有独立 pyproject
+uv pip install -e './stable-worldmodel[train]'
+uv pip install scikit-learn scipy matplotlib pyyaml pygame pymunk shapely opencv-python pillow
 uv pip check
-export STABLEWM_HOME=/data/lewm/stablewm
+export STABLEWM_HOME=/data/lewm/stablewm  # 换成服务器可写目录
 export SDL_VIDEODRIVER=dummy
+cd le-wm
+python -c "import stable_worldmodel as s; print(s.__file__)"
+python tests/test_research_contracts.py -v
+python tests/test_research_server.py -v
+python tests/test_research_replay_server.py -v
+uv pip freeze > server-environment.txt
 ```
 
-权重、数据和输出均通过参数或 `STABLEWM_HOME` 指定；没有写死本地绝对路径。服务器应先下载公开 PushT 权重与数据，再记录下载 URL、文件校验值和目录清单。
+安装包版本不是已经验证的锁定环境：先通过以上服务器测试，再固定该环境。若导入/仿真 API 不兼容，应处理版本兼容问题，不能跳过回放校验。
 
-## 推荐执行顺序
+随后在服务器准备权重及数据：
 
-1. **预检（待执行）**：确认两个仓库的 `git rev-parse HEAD`、`python research_cem.py --help`、PyTorch 设备和 `stable_worldmodel.__file__`。模型预检命令会打印实际类型、源码路径、参数量并断言所有参数冻结：
-
-   ```bash
-   python research_cem.py preflight --policy pusht/lewm --cache-dir "$STABLEWM_HOME" --device cuda
-   ```
-2. **案例清单**：
-
-   ```bash
-   python research_cem.py generate-cases --dataset pusht_expert_train --cache-dir "$STABLEWM_HOME" --num-cases 20 --goal-offset 25 --case-seed 123 --output runs/cases.json
-   ```
-
-   清单记录 `case_id, episode, start_step, goal_offset`。所有预算条件必须复用这一个文件；案例种子、环境种子和规划种子分开记录。
-
-3. **低预算冒烟**（先用 1–2 个案例）：
-
-   ```bash
-   python research_cem.py run --cases runs/cases.json --policy pusht/lewm --dataset pusht_expert_train --cache-dir "$STABLEWM_HOME" --device cuda --num-samples 30 --iterations 2 --topk 3 --output runs/smoke --save-snapshots
-   ```
-
-   过关条件是加载类/路径正确、权重严格加载、设备可用、动作形状和反标准化无异常、同种子重复动作一致。
-
-4. **预算条件**：只改变 `--num-samples N` 与 `--iterations I`，固定 H、K、`action_block`、`eval_budget`、warm-start、权重、预处理和案例清单。推荐少数组合，例如 `(30,2),(100,10),(300,30)`；每个条件使用不同的规划种子重复，但分析时先按案例汇总，不能把重复种子当成独立案例。
-
-   ```bash
-   python research_cem.py run ... --num-samples 100 --iterations 10 --topk 10 --output runs/N100_I10 --save-snapshots
-   ```
-
-5. **绘图**：
-
-   ```bash
-   python research_diag.py plot --run runs/N100_I10
-   ```
-
-   `budget_success_time.png` 报告成功率、回合时间和近似候选计算量（成功率误差条为 95% 正态区间）；`cem_cost_by_iteration.png` 区分每轮最小代价、精英均值和返回均值；`audit_cost_scatter.png`（有审计数据时）比较代价。多条件可一次传入多个 `--run`，单次运行的图只作检查，不能报告跨条件结论。
-
-## CEM 日志和快照
-
-`cem_iterations.jsonl` 每行包含 `plan_id、iteration、candidate_count、horizon、topk、iteration_min_cost、elite_mean_cost、distribution_std_mean`。`return_mean` 行给出更新后均值的独立预测代价。候选快照保存动作序列、每个候选的 `J_pred`、精英索引、更新后的均值和 `std`，并尽量保存在线状态/目标图像；诊断采样 RNG 是独立的 NumPy 生成器，不会改动规划器的 torch RNG。正式计时应关闭 `--save-snapshots`，并单独报告诊断模式开销。
-
-## 候选审计和状态恢复限制
-
-PushT 的 `_set_state` 只接收七维观测，内部还会推进一个物理步，不能声称精确恢复完整物理快照。服务器必须先做“固定 reset seed + 重放已执行动作前缀”或完整模拟器快照的重复恢复检查，比较位置、线速度、角速度和渲染图像，并核对首次规划数据集图像与恢复后的图像；任何不一致都应停止对应审计。只有通过后，才把真实重放表（每个候选包含 `plan_id,candidate_id,J_enc,J_task,endpoint_success,ever_success`）交给：
+- 权重目录：`$STABLEWM_HOME/checkpoints/quentinll/lewm-pusht/`，其中有 `weights.pt` 与 `config.json`。也可用 `--policy /绝对路径/weights.pt` 指向同一对文件。研究加载器只查找已有文件，不自动下载模型。
+- 数据：`$STABLEWM_HOME/datasets/pusht_expert_train.h5`。`--dataset` 是相对 datasets 目录的名称，**不带 `.h5`**，使用本仓库 HDF5Dataset 的接口。
+- 权重、预处理和数据来源必须符合预期；每次运行的完整数据 SHA256 扫描与 scaler 拟合在计时区间之外，可能耗时。scaler 沿用原评估方案拟合整份给定数据，不是另行训练世界模型。
 
 ```bash
-python research_diag.py audit --run runs/N100_I10 --replay server_replay.jsonl --keep 10
+python research_cem.py preflight --policy quentinll/lewm-pusht --device cuda
+python research_cem.py generate-cases --dataset pusht_expert_train \
+  --num-cases 20 --goal-offset 25 --case-seed 123 --output runs/cases.json
 ```
 
-审计必须从同一物理起点执行完整 `H × action_block` 个连续动作，不重新规划、不重复同一 block 动作，使用在线相同的反标准化、渲染和图像预处理。所有代价“小为好”：`J_pred` 是模型终点表征与目标表征的 SSE，`J_enc` 是真实终点图像经同一编码器后的 SSE，`J_task` 是明确的 PushT 任务误差；另外记录官方成功和途中成功。被选候选相对已审计候选集中实际最好者只能称为“已审计候选集上的选择损失”。
+每个案例来自不同 episode；使用的是给定数据集中的开发案例。默认 `pusht_expert_train` 不能用于宣称未见任务泛化。案例种子与规划种子分开；环境优先使用数据集 seed，缺失时才使用配置中的 environment_seed 派生值，实际 reset seed 会记录。
 
-## 输出与验收
+## 先做真实权重的配对冒烟
 
-每个运行目录应保存 `run_metadata.json`（代码版本、配置、案例文件、模型身份、冻结断言）、`episodes.jsonl`（成功、环境步数、规划次数、求解/回合时间和候选预测近似计算量）、`cem_iterations.jsonl` 及可选 `snapshots/`。运行未完成时保留目录并标注未完成，不静默覆盖已有结果。
+同一预算、案例、种子，分别关闭/开启诊断。两次输出目录都必须尚不存在。
 
-尚未执行的运行时验证包括：模型实际类与权重兼容性、CUDA/MPS 前向、日志开关是否保持同种子动作、返回均值评分、动作时间对齐、PushT 状态恢复和候选重放一致性、不同预算案例一致性，以及正式计时边界。当前已完成的检查仅包括源码阅读、配置/调用链核对、Python 语法编译和 Git 差异审查；没有成功率、耗时或研究结论可报告。
+```bash
+python research_cem.py run --config config/research/pusht_budget.yaml \
+  --cases runs/cases.json --limit-cases 2 --num-samples 30 --iterations 2 \
+  --planning-seed 42 --output runs/smoke_formal
+python research_cem.py run --config config/research/pusht_budget.yaml \
+  --cases runs/cases.json --limit-cases 2 --num-samples 30 --iterations 2 \
+  --planning-seed 42 --save-snapshots --max-snapshot-plans 2 --output runs/smoke_diag
+python research_diag.py check-pair --formal runs/smoke_formal --diagnostic runs/smoke_diag
+python research_diag.py audit --run runs/smoke_diag --output runs/smoke_audit
+python research_diag.py plot-diagnostics --run runs/smoke_diag \
+  --audit runs/smoke_audit --output runs/smoke_figures
+```
+
+`check-pair` 比较环境初始化和**整段实际执行动作的逐位一致性**。`audit` 对所有保存候选各回放两次，检查重建起点、整段物理轨迹、终点像素与成功标记，并重算 J_pred 对照收集值。默认保存每次迭代 2 个最好候选、2 个非最好随机候选和 1 个更新均值；可通过 `--keep-best/--keep-random` 控制数量。默认只保存每例第一个规划点，示例用两个规划点覆盖非空动作前缀。
+
+服务器验收至少需要：依赖路径正确、参数冻结、张量测试通过、真实 PushT 测试通过、check-pair 通过、audit complete。当前修复并未声称已通过这些服务器验收。
+
+## 正式预算实验
+
+保持所有配置相同，只有 N/I 和各条件共享的一组规划种子变化；`topk` 固定为 10。不要给正式运行加 `--diagnostics` 或 `--save-snapshots`。
+
+```bash
+for seed in 42 43 44; do
+  for budget in '30 2' '100 10' '300 30'; do
+    read -r n iterations <<< "$budget"
+    python research_cem.py run --config config/research/pusht_budget.yaml \
+      --cases runs/cases.json --num-samples "$n" --iterations "$iterations" \
+      --planning-seed "$seed" --output "runs/formal_N${n}_I${iterations}_S${seed}"
+  done
+done
+python research_diag.py plot --run runs/formal_N*_I*_S* --output runs/budget_figures
+```
+
+绘图会核对案例/种子配对、权重、数据、预处理、代码、设备、依赖和固定配置；重复行、缺失案例、不同 topk、诊断运行混入均报错。输出 `budget_summary.json` 和 `budget_success_time.png`。
+
+独立单位是案例（每个来自不同 episode），不把多个规划种子视作额外案例。一个种子时使用 Wilson 95% 区间；多个种子先求每例平均成功率，再使用独立有界案例均值的 Hoeffding 95% 区间，较保守，但全成功/全失败时不会错误地产生零宽区间。图是描述性比较，不是跨预算差异的显著性检验。
+
+## 审计定义与限制
+
+每个快照保存模型实际接收的归一化输入、完整候选动作块、返回均值、规划 RNG 状态、warm start、reset seed/options、初始/目标 state、已执行原始动作前缀、物理指纹、环境渲染和在线观测图像。
+
+PushT 的七维 `_set_state` 不是完整模拟器快照。这里重现相同 reset、上游的初始 state/goal 设置顺序和已执行动作前缀，再校验 agent/block 的位置、线速度、角度、角速度、力、力矩、质心和渲染。审计中每个候选都独立重建并回放两次。此检查能发现可观测重建误差，不构成对模拟器全部隐藏接触缓存的数学证明；任何检查失败均终止审计，不能通过 `--allow-inexact-state` 绕过。
+
+首次规划时，上游可能把数据集图像直接作为观测，它与重建环境的渲染不完全一致。`observation_render_pixel_max_abs` 专门暴露这个问题，不会悄悄替换输入。若不为零，必须单独分析该图像域偏差，不能把所有预测/真实差异都解释为动力学误差。重建环境与收集时环境渲染之间仍必须通过严格一致性检查。
+
+| 指标 | 定义 |
+| --- | --- |
+| J_pred | 冻结模型预测的 H 步终点表征到同一目标表征的 SSE |
+| J_enc | 真实执行 H × action_block 个连续动作后，终点图像编码到同一目标表征的 SSE |
+| J_task | `max(位置误差/20, 周期角度误差/(π/9))`，明确的研究任务代理代价 |
+| official_state_distance | 上游 `eval_state` 的原始七维距离，另行记录，不混称 J_task |
+| endpoint_success / ever_success | 终点官方成功 / 此候选动作执行期间任一步成功 |
+| selection_loss_on_audited_set | 最终返回均值的 J_task 减去已审计候选中最小 J_task |
+
+动作块展开为连续的二维动作序列，使用在线相同 StandardScaler 反标准化；不会把一个动作重复 action_block 次。审计执行全 H 个块，不重新规划。在线只执行前 K 个块，因此全 H 候选审计与在线闭环成功率回答不同问题。
+
+候选主键包括 iteration，实际返回均值独立保存并标记 selected；同一轮精英代价均值不等于该动作均值的代价。Spearman 相关按每个案例/规划点分别计算；常数序列或样本太少返回 null。候选来自有选择的子集，选择损失不是全局 regret，不能把各候选当独立任务计算置信区间。`plot-diagnostics` 也逐个案例/规划点绘图，不串接无关曲线。
+
+默认重建容差是物理绝对误差 1e-7、像素差 0；J_pred 重评分 atol/rtol 为 1e-4。容差可显式修改并记录，但调大容差必须说明原因，不能据此宣称精确恢复。若迁移机器，可通过 audit 的 `--policy/--cache-dir/--device` 指定路径/设备；权重、源码和相关依赖版本仍须匹配，且重评分与重复回放仍须通过。
+
+离线报告包含真实动作步数（含重复前缀回放）、环境重建次数和总耗时；reset/内部初始化物理子步不计入动作步数。所有离线成本独立于在线规划成本。
+
+## 固定同一个起点比较预算
+
+闭环预算改变后，后续访问状态也会改变。要隔离搜索预算的影响，可选择诊断运行中的一个 `snapshot.json`，冻结其模型输入、真实起点和 warm start：
+
+```bash
+# 将下一行替换为上面运行实际产生的快照路径。
+SNAPSHOT=runs/smoke_diag/snapshots/实际case_id/plan_000000/snapshot.json
+python research_diag.py replan --run runs/smoke_diag --snapshot "$SNAPSHOT" \
+  --num-samples 100 --iterations 10 --topk 10 --output runs/replan_N100_I10
+python research_diag.py audit --run runs/replan_N100_I10 --output runs/replan_audit
+```
+
+默认从保存的规划 RNG 状态开始；显式 `--planning-seed` 可研究新的随机搜索。不同 N 的采样张量形状不同，不保证所有候选逐一嵌套。`replan` 结果标为 counterfactual，只比较固定状态上的候选质量，不产生闭环成功率，也不能混入正式预算图。先使用与源快照相同的 N/I/topk 重规划，检查返回动作与 J_pred 一致，再改变预算。
+
+## 本次校验边界
+
+- 已执行：研究脚本/测试脚本语法编译、两个 CLI 的帮助入口、9 项轻量契约测试、Git diff 空白检查、对照仓库内真实调用链审查。
+- 未执行：模型加载或前向、张量/物理回放服务器测试、数据下载、训练、真实实验、GPU 耗时和成功率测量。
+- 服务器测试通过后再启动大预算；保留失败目录及 STATUS 错误信息，用新的输出目录重跑。
