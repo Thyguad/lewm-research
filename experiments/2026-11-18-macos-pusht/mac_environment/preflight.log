@@ -1,0 +1,41 @@
+20:32:35 | INFO  | __init__.py | PyTorch version 2.15.0 available.
+20:32:36 | INFO  | atomic_chec~| [atomic_save] installed crash-safe checkpoint plugin (write to sibling .tmp + fsync + atomic rename)
+20:32:36 | INFO  | utils.py    | Created ViT-tiny from scratch with config: {'hidden_size': 192, 'num_hidden_layers': 12, 'num_attention_heads': 3, 'intermediate_size': 768, 'image_size': 224, 'patch_size': 14}
+{
+  "model": {
+    "type": "stable_worldmodel.wm.lewm.lewm.LeWM",
+    "source": "/Users/xuhaoquan/project/lewm-research/stable-worldmodel/stable_worldmodel/wm/lewm/lewm.py",
+    "weights_sha256": "48938400ae3464c9680731287f583a9cb516f55a8ec64ea13a91be47fb15b607",
+    "config_sha256": "2564086e961e7b5c7c04dffc451091115b389a590645ff19653c64fd0bc16e09",
+    "checkpoint_path": "/Volumes/MOBILE/Dataset/LeWM/checkpoints/quentinll/lewm-pusht/weights.pt"
+  },
+  "requested_device": "mps",
+  "device": "mps",
+  "execution": {
+    "device": "mps",
+    "cpu": "arm",
+    "threads": 8,
+    "interop_threads": 12,
+    "cuda_runtime": null,
+    "deterministic_algorithms": false,
+    "float32_matmul_precision": "highest",
+    "machine": "arm64",
+    "macos": "27.2.1",
+    "model_dtype": "float32",
+    "sdl_video_driver": "dummy",
+    "mps_built": true,
+    "mps_available": true,
+    "mps_environment": {
+      "PYTORCH_ENABLE_MPS_FALLBACK": null,
+      "PYTORCH_MPS_FAST_MATH": null,
+      "PYTORCH_MPS_PREFER_METAL": null,
+      "PYTORCH_MPS_METAL_VERSION": null,
+      "PYTORCH_MPS_HIGH_WATERMARK_RATIO": null,
+      "PYTORCH_MPS_LOW_WATERMARK_RATIO": null
+    },
+    "mps_recommended_max_memory": 19069665280
+  },
+  "frozen": true,
+  "parameters": 18034478,
+  "forward_check": "passed (synthetic input; not an experiment)"
+}

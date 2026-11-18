@@ -1,0 +1,38 @@
+[
+  {
+    "ci_high": 0.4203473976208193,
+    "ci_low": 0,
+    "ci_method": "Hoeffding 95%; case clusters",
+    "independent_cases": 20,
+    "iterations": 2,
+    "mean_candidate_prediction_steps": 600.0,
+    "mean_solver_seconds_per_episode": 0.19400102428432245,
+    "num_samples": 30,
+    "planning_seeds": 3,
+    "success_rate": 0.11666666666666667
+  },
+  {
+    "ci_high": 0.9036807309541526,
+    "ci_low": 0.2963192690458474,
+    "ci_method": "Hoeffding 95%; case clusters",
+    "independent_cases": 20,
+    "iterations": 5,
+    "mean_candidate_prediction_steps": 3000.0,
+    "mean_solver_seconds_per_episode": 0.8849226541390333,
+    "num_samples": 60,
+    "planning_seeds": 3,
+    "success_rate": 0.6
+  },
+  {
+    "ci_high": 1,
+    "ci_low": 0.5463192690458474,
+    "ci_method": "Hoeffding 95%; case clusters",
+    "independent_cases": 20,
+    "iterations": 10,
+    "mean_candidate_prediction_steps": 10000.0,
+    "mean_solver_seconds_per_episode": 3.0380761465115937,
+    "num_samples": 100,
+    "planning_seeds": 3,
+    "success_rate": 0.85
+  }
+]

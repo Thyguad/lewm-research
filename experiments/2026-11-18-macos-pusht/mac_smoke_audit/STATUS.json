@@ -1,0 +1,8 @@
+{
+  "candidates": 40,
+  "environment_restores": 80,
+  "offline_environment_steps": 3000,
+  "state": "complete",
+  "updated_at": "2026-11-18T12:52:52.926258+00:00",
+  "wall_seconds": 8.058567791013047
+}

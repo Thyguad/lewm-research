@@ -1,0 +1,133 @@
+{
+  "cases": [
+    {
+      "case_id": "1a6f0e3926ec",
+      "episode": 6495,
+      "goal_offset": 25,
+      "start_step": 70
+    },
+    {
+      "case_id": "20df829a7591",
+      "episode": 16627,
+      "goal_offset": 25,
+      "start_step": 76
+    },
+    {
+      "case_id": "1f0f6ef693f0",
+      "episode": 8396,
+      "goal_offset": 25,
+      "start_step": 26
+    },
+    {
+      "case_id": "4d110e3a16d1",
+      "episode": 3442,
+      "goal_offset": 25,
+      "start_step": 19
+    },
+    {
+      "case_id": "6ede1c6702c2",
+      "episode": 16103,
+      "goal_offset": 25,
+      "start_step": 28
+    },
+    {
+      "case_id": "343c18bd8d16",
+      "episode": 17247,
+      "goal_offset": 25,
+      "start_step": 0
+    },
+    {
+      "case_id": "d4e864ee6073",
+      "episode": 4763,
+      "goal_offset": 25,
+      "start_step": 61
+    },
+    {
+      "case_id": "f034fb4f742c",
+      "episode": 5166,
+      "goal_offset": 25,
+      "start_step": 2
+    },
+    {
+      "case_id": "f0c65978aace",
+      "episode": 4114,
+      "goal_offset": 25,
+      "start_step": 71
+    },
+    {
+      "case_id": "1784b7dea470",
+      "episode": 12737,
+      "goal_offset": 25,
+      "start_step": 52
+    },
+    {
+      "case_id": "c942b3a3f311",
+      "episode": 6229,
+      "goal_offset": 25,
+      "start_step": 21
+    },
+    {
+      "case_id": "0a3310e9c0c0",
+      "episode": 14735,
+      "goal_offset": 25,
+      "start_step": 47
+    },
+    {
+      "case_id": "90fe86a5da22",
+      "episode": 11069,
+      "goal_offset": 25,
+      "start_step": 1
+    },
+    {
+      "case_id": "d3c292384de4",
+      "episode": 15167,
+      "goal_offset": 25,
+      "start_step": 18
+    },
+    {
+      "case_id": "c987f1f7b839",
+      "episode": 8431,
+      "goal_offset": 25,
+      "start_step": 53
+    },
+    {
+      "case_id": "382093d54c4a",
+      "episode": 1004,
+      "goal_offset": 25,
+      "start_step": 7
+    },
+    {
+      "case_id": "319b18893b9b",
+      "episode": 15315,
+      "goal_offset": 25,
+      "start_step": 52
+    },
+    {
+      "case_id": "a6b797f1bcfd",
+      "episode": 16972,
+      "goal_offset": 25,
+      "start_step": 10
+    },
+    {
+      "case_id": "0c6102052e2b",
+      "episode": 3285,
+      "goal_offset": 25,
+      "start_step": 82
+    },
+    {
+      "case_id": "74a801dd2627",
+      "episode": 288,
+      "goal_offset": 25,
+      "start_step": 10
+    }
+  ],
+  "created_at": "2026-11-18T12:50:22.639857+00:00",
+  "metadata": {
+    "case_seed": 123,
+    "dataset": "pusht_expert_train",
+    "dataset_sha256": "b6ebd9ac94bbe9e383f6e7a9cd92d74e9aa665ea57b758ed3717b0ee7df8d4fb",
+    "dataset_size": 46300921856,
+    "sampling": "one start per distinct episode; development cases from supplied dataset"
+  },
+  "schema": "lewm-frozen-cases-v1"
+}

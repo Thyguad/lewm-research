@@ -1,0 +1,99 @@
+{
+  "action_block": 5,
+  "arrays_sha256": "0db12c697bcc6ede8d44f9c5209e8f457b0550a4e2e8d6232b2704b54f9c08d6",
+  "candidate_batch_size": 16,
+  "candidates": [
+    {
+      "candidate_id": "sample_15",
+      "iteration": 0,
+      "kind": "best",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_22",
+      "iteration": 0,
+      "kind": "best",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_20",
+      "iteration": 0,
+      "kind": "random",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_12",
+      "iteration": 0,
+      "kind": "random",
+      "selected": false
+    },
+    {
+      "candidate_id": "mean",
+      "iteration": 0,
+      "kind": "updated_mean",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_16",
+      "iteration": 1,
+      "kind": "best",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_0",
+      "iteration": 1,
+      "kind": "best",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_21",
+      "iteration": 1,
+      "kind": "random",
+      "selected": false
+    },
+    {
+      "candidate_id": "sample_9",
+      "iteration": 1,
+      "kind": "random",
+      "selected": false
+    },
+    {
+      "candidate_id": "mean",
+      "iteration": 1,
+      "kind": "updated_mean",
+      "selected": true
+    }
+  ],
+  "case_id": "20df829a7591",
+  "environment_step": 25,
+  "horizon": 5,
+  "iterations": 2,
+  "num_samples": 30,
+  "plan_id": 1,
+  "planning_seed": 181624003,
+  "recipe": {
+    "goal_state": [
+      301.992919921875,
+      362.70294189453125,
+      316.9567565917969,
+      269.72064208984375,
+      1.444395661354065,
+      219.13368225097656,
+      54.65511703491211
+    ],
+    "initial_state": [
+      326.1743469238281,
+      396.38385009765625,
+      317.5440673828125,
+      281.972412109375,
+      1.511569857597351,
+      -26.581918716430664,
+      -66.75276947021484
+    ],
+    "reset_options": {},
+    "reset_seed": 181624084
+  },
+  "run_id": "9d4b785351084d669a6a938b49e8748a",
+  "schema": "lewm-snapshot-v2",
+  "topk": 10
+}
