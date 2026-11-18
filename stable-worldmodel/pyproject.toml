@@ -32,6 +32,23 @@ dependencies = [
 swm = "stable_worldmodel.cli:app"
 
 [project.optional-dependencies]
+pusht-research = [
+    "transformers>=4.50.0",
+    "stable-pretraining",
+    "hydra-core",
+    "scikit-learn",
+    "scipy",
+    "matplotlib",
+    "pyyaml",
+    "gymnasium>=1.1,<2",
+    "pygame",
+    "pymunk>=7,<8",
+    "shapely",
+    "opencv-python-headless",
+    "pillow",
+    "huggingface_hub",
+    "zstandard",
+]
 train = [
     "transformers>=4.50.0",
     "stable-pretraining",

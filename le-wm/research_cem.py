@@ -1,4 +1,4 @@
-"""Frozen PushT collection. Runtime commands are intended for the server only."""
+"""Frozen PushT collection. Supports CUDA, Apple MPS and CPU."""
 from __future__ import annotations
 
 import argparse
@@ -16,12 +16,12 @@ from research_common import (
 
 DEFAULTS = {
     'env_name': 'swm/PushT-v1', 'dataset': 'pusht_expert_train', 'cache_dir': None,
-    'policy': 'quentinll/lewm-pusht', 'device': 'cuda', 'img_size': 224,
+    'policy': 'quentinll/lewm-pusht', 'device': 'auto', 'img_size': 224,
     'horizon': 5, 'receding_horizon': 5, 'action_block': 5, 'eval_budget': 50,
     'goal_offset': 25, 'warm_start': True, 'num_samples': 100, 'iterations': 10,
     'topk': 10, 'planning_seed': 42, 'environment_seed': 123,
     'diagnostics': False, 'save_snapshots': False, 'keep_best': 2,
-    'keep_random': 2, 'max_snapshot_plans': 1,
+    'keep_random': 2, 'max_snapshot_plans': 1, 'candidate_batch_size': 0,
 }
 
 
@@ -44,7 +44,7 @@ def _load_cfg(args):
                 'topk', 'max_snapshot_plans'):
         if type(cfg[key]) is not int or cfg[key] < 1:
             raise ValueError(f'{key} must be a positive integer')
-    for key in ('keep_best', 'keep_random', 'planning_seed', 'environment_seed'):
+    for key in ('keep_best', 'keep_random', 'planning_seed', 'environment_seed', 'candidate_batch_size'):
         if type(cfg[key]) is not int or cfg[key] < 0:
             raise ValueError(f'{key} must be a nonnegative integer')
     for key in ('warm_start', 'diagnostics', 'save_snapshots'):
@@ -58,8 +58,8 @@ def _load_cfg(args):
         raise ValueError('Require 2 <= topk <= num_samples')
     if min(cfg['keep_best'], cfg['keep_random']) < 0 or cfg['max_snapshot_plans'] < 1:
         raise ValueError('Invalid snapshot sampling limits')
-    if str(cfg['device']).split(':')[0] not in ('cpu', 'cuda', 'mps'):
-        raise ValueError('device must be cpu, cuda[:index] or mps')
+    from research_device import validate_device_name
+    validate_device_name(cfg['device'])
     return cfg
 
 
@@ -110,6 +110,31 @@ def expand_info(info, count):
     return out
 
 
+def score_candidates(model, info, candidates, batch_size=0):
+    """Score ALL candidates before global top-k; no RNG or per-chunk CEM update.
+
+    Inputs are moved to the device before expansion, so repeated images are views.
+    Chunk size is an explicit protocol parameter: floating point rounding may
+    differ from an unchunked call, so it must stay fixed within comparisons.
+    """
+    import torch
+
+    if type(batch_size) is not int or batch_size < 0:
+        raise ValueError('candidate_batch_size must be a nonnegative integer')
+    count = candidates.shape[1]
+    if count < 1:
+        raise ValueError('No candidates')
+    width = batch_size or count
+    parts = []
+    for start in range(0, count, width):
+        chunk = candidates[:, start:start + width]
+        cost = model.get_cost(expand_info(info, chunk.shape[1]), chunk)
+        if cost.shape != chunk.shape[:2] or not bool(torch.isfinite(cost).all()):
+            raise ValueError('Invalid/nonfinite candidate costs')
+        parts.append(cost)
+    return torch.cat(parts, dim=1)
+
+
 class LoggingCEMSolver:
     """Single-env reference CEM: final elite mean, unbiased std, zero tail padding.
 
@@ -120,7 +145,7 @@ class LoggingCEMSolver:
 
     def __init__(self, model, *, num_samples, n_steps, topk, device, seed,
                  diagnostics=False, snapshot_dir=None, keep_best=2, keep_random=2,
-                 max_snapshot_plans=1, run_id='unassigned', case_id='unassigned'):
+                 max_snapshot_plans=1, run_id='unassigned', case_id='unassigned', candidate_batch_size=0):
         import numpy as np
         import torch
 
@@ -128,7 +153,11 @@ class LoggingCEMSolver:
         self.num_samples, self.n_steps, self.topk = int(num_samples), int(n_steps), int(topk)
         if not 2 <= self.topk <= self.num_samples or self.n_steps < 1:
             raise ValueError('Invalid CEM configuration')
-        self.device = torch.device(device)
+        from research_device import resolve_device
+        self.device = torch.device(resolve_device(device))
+        if type(candidate_batch_size) is not int or candidate_batch_size < 0:
+            raise ValueError('candidate_batch_size must be a nonnegative integer')
+        self.candidate_batch_size = candidate_batch_size
         self.seed = int(seed)
         self.torch_gen = torch.Generator(device='cpu').manual_seed(self.seed)
         self.diagnostic_rng = np.random.default_rng(derived_seed(self.seed, 'diagnostics'))
@@ -189,8 +218,8 @@ class LoggingCEMSolver:
             arrays['planner_rng_state'] = self.torch_gen.get_state().cpu().numpy()
             arrays['init_action'] = (init_action.detach().cpu().numpy() if init_action is not None
                                      else np.zeros((1, 0, self.action_dim), dtype=np.float32))
-        info = {k: (v.float() if torch.is_tensor(v) and v.is_floating_point() else v)
-                for k, v in info_dict.items()}
+        from research_device import prepare_model_info
+        info = prepare_model_info(info_dict, self.device)
         if capture:
             for name in ('pixels', 'goal', 'action'):
                 if name not in info or not torch.is_tensor(info[name]):
@@ -198,7 +227,7 @@ class LoggingCEMSolver:
                 arrays['info_' + name] = info[name].detach().cpu().numpy()
         sync_device(self.device)
         segment_start = time.perf_counter()
-        mean = torch.zeros((1, self.horizon, self.action_dim), device=self.device)
+        mean = torch.zeros((1, self.horizon, self.action_dim), device=self.device, dtype=torch.float32)
         if init_action is not None:
             if init_action.ndim != 3 or init_action.shape[0] != 1 or init_action.shape[2] != self.action_dim:
                 raise ValueError('Invalid warm-start shape')
@@ -213,10 +242,10 @@ class LoggingCEMSolver:
         return_score = None
         for iteration in range(self.n_steps):
             noise = torch.randn((1, self.num_samples, self.horizon, self.action_dim),
-                                generator=self.torch_gen, device='cpu').to(self.device)
+                                generator=self.torch_gen, device='cpu', dtype=torch.float32).to(self.device)
             candidates = noise * std[:, None] + mean[:, None]
             candidates[:, 0] = mean
-            costs = self.model.get_cost(expand_info(info, self.num_samples), candidates)
+            costs = score_candidates(self.model, info, candidates, self.candidate_batch_size)
             if costs.shape != (1, self.num_samples) or not bool(torch.isfinite(costs).all()):
                 raise ValueError('Invalid/nonfinite candidate costs')
             values, indices = torch.topk(costs, self.topk, dim=1, largest=False)
@@ -274,14 +303,15 @@ class LoggingCEMSolver:
                 'schema': 'lewm-snapshot-v2', **key, **context,
                 'horizon': self.horizon, 'action_block': self._config.action_block,
                 'num_samples': self.num_samples, 'iterations': self.n_steps,
-                'topk': self.topk, 'candidates': candidate_meta,
+                'topk': self.topk, 'candidate_batch_size': self.candidate_batch_size,
+                'candidates': candidate_meta,
                 'arrays_sha256': file_hash(folder / 'arrays.npz'),
             })
         wall = time.perf_counter() - total_start
         if not self.diagnostics:
             search_seconds = wall
         self.plan_rows.append({
-            **key, 'solver_seconds': search_seconds,
+            **key, 'solver_seconds': search_seconds, 'candidate_batch_size': self.candidate_batch_size,
             'solver_wall_seconds': wall, 'diagnostic_and_capture_seconds': max(0.0, wall - search_seconds),
             'extra_score_seconds': extra_score_seconds,
             'returned_mean_cost': return_score, 'diagnostics': self.diagnostics,
@@ -329,6 +359,8 @@ class InstrumentedPolicy:
 
 
 def run_experiment(args):
+    from research_device import prepare_headless, resolve_device
+    prepare_headless()
     import numpy as np
     import stable_worldmodel as swm
     from research_runtime import (
@@ -337,6 +369,9 @@ def run_experiment(args):
     )
 
     cfg = _load_cfg(args)
+    requested_device = cfg['device']
+    cfg['device'] = resolve_device(requested_device)
+    print(f"Device: {requested_device} -> {cfg['device']}", flush=True)
     cases, case_meta = read_cases(args.cases)
     if args.limit_cases is not None:
         if args.limit_cases < 1:
@@ -364,7 +399,7 @@ def run_experiment(args):
         run_id = uuid.uuid4().hex
         write_json(output / 'run_metadata.json', {
             **runtime_metadata(Path(__file__).parent), 'schema': 'lewm-run-v2', 'run_id': run_id,
-            'config': cfg, 'cases_sha256': file_hash(args.cases), 'cases': [asdict(c) for c in cases],
+            'config': cfg, 'requested_device': requested_device, 'cases_sha256': file_hash(args.cases), 'cases': [asdict(c) for c in cases],
             'case_metadata': case_meta, 'model': model_identity,
             'processors_sha256': file_hash(output / 'processors.json'),
             'sources': source_fingerprints(),
@@ -385,6 +420,7 @@ def run_experiment(args):
                 diagnostics=cfg['diagnostics'], snapshot_dir=output / 'snapshots' if cfg['save_snapshots'] else None,
                 keep_best=cfg['keep_best'], keep_random=cfg['keep_random'],
                 max_snapshot_plans=cfg['max_snapshot_plans'], run_id=run_id, case_id=case.case_id,
+                candidate_batch_size=cfg['candidate_batch_size'],
             )
             world = make_world(cfg)
             try:
@@ -436,14 +472,38 @@ def run_experiment(args):
             dataset.h5_file.close()
 
 
-def preflight(args):
-    from research_common import source_identity
-    from research_runtime import load_model
+def doctor(args):
+    from research_device import prepare_headless, resolve_device, probe_device
+    prepare_headless()
+    device = resolve_device(args.device)
+    print(json.dumps({'requested_device': args.device, **probe_device(device)}, indent=2))
 
-    model, identity = load_model(args.policy, args.cache_dir, args.device)
-    print(json.dumps({'model': identity, 'source': source_identity(model), 'device': args.device,
-                      'frozen': all(not p.requires_grad for p in model.parameters()),
-                      'parameters': sum(p.numel() for p in model.parameters())}, indent=2))
+
+def preflight(args):
+    import torch
+    from research_runtime import load_model, execution_identity
+    from research_device import resolve_device, prepare_headless
+
+    prepare_headless()
+    device = resolve_device(args.device)
+    model, identity = load_model(args.policy, args.cache_dir, device)
+    result = {'model': identity, 'requested_device': args.device, 'device': device,
+              'execution': execution_identity(device),
+              'frozen': all(not p.requires_grad for p in model.parameters()),
+              'parameters': sum(p.numel() for p in model.parameters()),
+              'forward_check': 'not_run'}
+    if args.forward_check:
+        from research_device import prepare_model_info
+        info = prepare_model_info({'pixels': torch.zeros(1, 1, 3, 224, 224),
+                                   'goal': torch.zeros(1, 1, 3, 224, 224),
+                                   'action': torch.zeros(1, 1, 2)}, device)
+        with torch.inference_mode():
+            costs = score_candidates(model, info, torch.zeros(1, 2, 5, 10, device=device), 1)
+        sync_device(device)
+        if costs.shape != (1, 2) or not bool(torch.isfinite(costs).all()):
+            raise RuntimeError('Checkpoint forward check failed')
+        result['forward_check'] = 'passed (synthetic input; not an experiment)'
+    print(json.dumps(result, indent=2))
 
 
 def parser():
@@ -470,10 +530,13 @@ def parser():
     f = sub.add_parser('preflight')
     f.add_argument('--policy', default='quentinll/lewm-pusht')
     f.add_argument('--cache-dir')
-    f.add_argument('--device', default='cuda')
+    f.add_argument('--device', default='auto')
+    f.add_argument('--forward-check', action=argparse.BooleanOptionalAction, default=True)
+    d = sub.add_parser('doctor')
+    d.add_argument('--device', default='auto')
     return p
 
 
 if __name__ == '__main__':
     args = parser().parse_args()
-    {'generate-cases': generate_cases, 'run': run_experiment, 'preflight': preflight}[args.command](args)
+    {'generate-cases': generate_cases, 'run': run_experiment, 'preflight': preflight, 'doctor': doctor}[args.command](args)

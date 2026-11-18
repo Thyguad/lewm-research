@@ -1,4 +1,4 @@
-"""Server-only model, preprocessing and deterministic PushT replay helpers.
+"""Cross-platform model, preprocessing and deterministic PushT replay helpers.
 
 Imports stay inside functions so static inspection and CLI help need no ML stack.
 """
@@ -23,15 +23,18 @@ def resolve_checkpoint(policy, cache_dir=None):
             raise ValueError(f'Expected exactly one .pt in {path}; use an explicit weights path')
         path = files[0]
     if not path.is_file() or not (path.parent / 'config.json').is_file():
-        raise FileNotFoundError('Download weights.pt and config.json on the server first: ' + str(path))
+        raise FileNotFoundError('Download weights.pt and config.json before running: ' + str(path))
     return path.resolve()
 
 
 def load_model(policy, cache_dir, device):
+    from research_device import prepare_headless, resolve_device
+    prepare_headless()
+    device = resolve_device(device)
     import stable_worldmodel as swm
 
     path = resolve_checkpoint(policy, cache_dir)
-    model = freeze_eval(swm.wm.utils.load_pretrained(str(path), cache_dir=cache_dir)).to(device)
+    model = freeze_eval(swm.wm.utils.load_pretrained(str(path), cache_dir=cache_dir)).float().to(device)
     if source_identity(model)['type'] != 'stable_worldmodel.wm.lewm.lewm.LeWM':
         raise ValueError('This audit protocol requires stable_worldmodel.wm.lewm.lewm.LeWM')
     if any(p.requires_grad for p in model.parameters()):
@@ -66,6 +69,8 @@ def execution_identity(device):
                     capability=[props.major, props.minor], cudnn=torch.backends.cudnn.version(),
                     matmul_tf32=torch.backends.cuda.matmul.allow_tf32,
                     cudnn_tf32=torch.backends.cudnn.allow_tf32)
+    from research_device import backend_metadata
+    info.update(backend_metadata(device))
     return info
 
 
@@ -138,6 +143,8 @@ def inverse_actions(normalized, action_stats):
 
 
 def make_world(cfg):
+    from research_device import prepare_headless
+    prepare_headless()
     import stable_worldmodel as swm
 
     return swm.World(

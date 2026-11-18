@@ -1,4 +1,4 @@
-"""Server-side replay audit and plots. No ML imports at module import time."""
+"""Cross-platform replay audit and plots. No ML imports at module import time."""
 from __future__ import annotations
 
 import argparse
@@ -55,11 +55,14 @@ def snapshot_data(path, meta):
 
 def verify_runtime(meta, policy=None, cache_dir=None, device=None):
     from research_runtime import load_model, source_fingerprints
+    from research_device import resolve_device, prepare_headless
+    prepare_headless()
 
     cfg = meta['config'].copy()
     for name, value in (('policy', policy), ('cache_dir', cache_dir), ('device', device)):
         if value is not None:
             cfg[name] = value
+    cfg['device'] = resolve_device(cfg['device'])
     if source_fingerprints() != meta['sources']:
         raise ValueError('Installed stable-worldmodel source differs from collection')
     versions = runtime_metadata()['packages']
@@ -67,7 +70,7 @@ def verify_runtime(meta, policy=None, cache_dir=None, device=None):
                  'Pillow', 'scikit-learn', 'transformers'):
         if versions[name] != meta['packages'][name]:
             raise ValueError(f'Runtime package changed since collection: {name}')
-    for name in ('research_runtime.py', 'research_cem.py'):
+    for name in ('research_runtime.py', 'research_cem.py', 'research_device.py'):
         if file_hash(Path(__file__).with_name(name)) != meta['research_sources'][name]:
             raise ValueError(f'Collection/replay implementation changed: {name}')
     model, identity = load_model(cfg['policy'], cfg['cache_dir'], cfg['device'])
@@ -78,9 +81,9 @@ def verify_runtime(meta, policy=None, cache_dir=None, device=None):
 
 
 def model_inputs(data, device):
-    import torch
-    return {name: torch.from_numpy(data['info_' + name].copy()).to(device)
-            for name in ('pixels', 'goal', 'action')}
+    from research_device import prepare_model_info
+    return prepare_model_info({name: data['info_' + name].copy()
+                               for name in ('pixels', 'goal', 'action')}, device)
 
 
 def replay_candidate(cfg, snap, data, actions, state_atol, pixel_atol):
@@ -262,7 +265,8 @@ def replan(args):
             device=cfg['device'], seed=derived_seed(cfg['planning_seed'], snap['case_id']),
             diagnostics=True, snapshot_dir=output / 'snapshots',
             keep_best=cfg['keep_best'], keep_random=cfg['keep_random'],
-            max_snapshot_plans=snap['plan_id'] + 1, run_id=run_id, case_id=snap['case_id'])
+            max_snapshot_plans=snap['plan_id'] + 1, run_id=run_id, case_id=snap['case_id'],
+            candidate_batch_size=cfg.get('candidate_batch_size', 0))
         solver.configure(action_space=SimpleNamespace(shape=(1, 2)), n_envs=1,
                          config=swm.PlanConfig(horizon=cfg['horizon'], receding_horizon=cfg['receding_horizon'],
                                                action_block=cfg['action_block'], history_len=1,

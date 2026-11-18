@@ -1,4 +1,4 @@
-"""SERVER ONLY: real PushT reset/prefix replay, no checkpoint or dataset."""
+"""Real PushT reset/prefix replay on Mac/Linux, no checkpoint or dataset."""
 import json
 import os
 from pathlib import Path
