@@ -1,4 +1,4 @@
-"""SERVER ONLY: tensor-level regressions; no checkpoint or dataset required."""
+"""CPU tensor regressions on Mac/Linux; no checkpoint or dataset required."""
 from pathlib import Path
 import sys
 import tempfile

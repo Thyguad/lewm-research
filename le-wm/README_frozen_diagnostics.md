@@ -1,6 +1,6 @@
 # LeWM 冻结 PushT 规划诊断
 
-这组脚本冻结世界模型，只研究规划与诊断，不训练、不修改模型权重。正式实验在服务器执行。本次修复只做了源码检查、语法检查和不导入模型/仿真器的轻量契约测试；张量测试、PushT 回放、真实权重前向和实验结果仍待服务器验证。
+这组脚本冻结世界模型，只研究规划与诊断，不训练、不修改模型权重。支持服务器 CUDA、Apple Silicon MPS 和 CPU。Mac 用户先阅读 [Mac 安装与实验教程](README_macos.md)，使用 `config/research/pusht_mac.yaml`；本文保留通用协议和服务器示例。CPU 回归与小流程集成已经验证，真实预训练权重实验和 MPS 实机验收仍需在目标机器执行。
 
 ## 修复范围与协议
 
@@ -22,10 +22,13 @@
 | `research_common.py` | 清单、身份校验、状态文件和日志 |
 | `research_cem.py` | 固定案例、模型预检、正式收集与诊断收集 |
 | `research_runtime.py` | 权重/预处理、PushT 重建、状态校验和任务指标 |
+| `research_device.py` | 设备选择、模型 float32 输入、无窗口模式与设备元数据 |
 | `research_diag.py` | 候选回放审计、固定状态重规划、配对检查和绘图 |
 | `tests/test_research_contracts.py` | 不加载模型/仿真器的配置与数据契约测试 |
-| `tests/test_research_server.py` | 服务器张量回归测试，无需权重/数据 |
-| `tests/test_research_replay_server.py` | 服务器真实 PushT 回放测试，无需权重/数据 |
+| `tests/test_research_server.py` | 跨平台 CPU 张量回归测试，无需权重/数据 |
+| `tests/test_research_replay_server.py` | 跨平台真实 PushT 回放测试，无需权重/数据 |
+| `tests/test_research_devices.py` / `test_research_lewm_devices.py` | 设备边界、分批评分、CPU 与条件 MPS 测试 |
+| `tests/test_research_pipeline.py` | 本地小模型/小数据的完整 CPU 流程测试 |
 
 ## 服务器部署
 
@@ -36,7 +39,7 @@ uv venv --python 3.11
 source .venv/bin/activate
 uv pip install torch torchvision
 uv pip install -e './stable-worldmodel[train]'
-uv pip install scikit-learn scipy matplotlib pyyaml pygame pymunk shapely opencv-python pillow
+uv pip install scikit-learn scipy matplotlib pyyaml pygame 'pymunk>=7,<8' shapely opencv-python pillow
 uv pip check
 export STABLEWM_HOME=/data/lewm/stablewm  # 换成服务器可写目录
 export SDL_VIDEODRIVER=dummy
@@ -83,7 +86,7 @@ python research_diag.py plot-diagnostics --run runs/smoke_diag \
 
 `check-pair` 比较环境初始化和**整段实际执行动作的逐位一致性**。`audit` 对所有保存候选各回放两次，检查重建起点、整段物理轨迹、终点像素与成功标记，并重算 J_pred 对照收集值。默认保存每次迭代 2 个最好候选、2 个非最好随机候选和 1 个更新均值；可通过 `--keep-best/--keep-random` 控制数量。默认只保存每例第一个规划点，示例用两个规划点覆盖非空动作前缀。
 
-服务器验收至少需要：依赖路径正确、参数冻结、张量测试通过、真实 PushT 测试通过、check-pair 通过、audit complete。当前修复并未声称已通过这些服务器验收。
+目标机器验收至少需要：依赖路径正确、参数冻结、张量测试通过、真实 PushT 测试通过、真实权重的 check-pair 通过、audit complete。开发环境的小模型测试不代替目标机器和真实权重验收。
 
 ## 正式预算实验
 
@@ -146,6 +149,6 @@ python research_diag.py audit --run runs/replan_N100_I10 --output runs/replan_au
 
 ## 本次校验边界
 
-- 已执行：研究脚本/测试脚本语法编译、两个 CLI 的帮助入口、9 项轻量契约测试、Git diff 空白检查、对照仓库内真实调用链审查。
-- 未执行：模型加载或前向、张量/物理回放服务器测试、数据下载、训练、真实实验、GPU 耗时和成功率测量。
-- 服务器测试通过后再启动大预算；保留失败目录及 STATUS 错误信息，用新的输出目录重跑。
+- 已执行：语法与 CLI 检查、11 项轻量契约、7 项设备/分批 CPU 回归、5 项原求解器回归、1 项实际 LeWM 小模型 rollout、1 项真实 PushT 回放、1 项完整小流程集成，共 26 项通过。3 项 MPS 专项测试在 Linux 跳过。
+- 未执行：Mac 安装与 MPS 实机验收、官方预训练权重前向、真实数据实验、训练、GPU 耗时和成功率测量。小流程使用临时生成的测试权重/数据，不是论文复现结果。
+- 目标机器验收通过后再启动大预算；保留失败目录及 STATUS 错误信息，用新的输出目录重跑。详细版本与 Mac 验收步骤见 [Mac 教程](README_macos.md)。

@@ -31,13 +31,24 @@ class Contracts(unittest.TestCase):
 
     def test_invalid_config_rejected(self):
         for content in ('unknown: 1', 'topk: 1', 'horizon: true', 'receding_horizon: 6',
-                        'horizon: 20', 'diagnostics: "false"', 'keep_random: 1.5'):
+                        'horizon: 20', 'diagnostics: "false"', 'keep_random: 1.5',
+                        'candidate_batch_size: -1', 'candidate_batch_size: true', 'device: mps:1'):
             with self.subTest(content=content):
                 cfg = self.root / 'bad.yaml'
                 cfg.write_text(content)
                 args = parser().parse_args(['run', '--cases', 'c', '--output', 'r', '--config', str(cfg)])
                 with self.assertRaises(ValueError):
                     _load_cfg(args)
+
+    def test_mac_profile_preserves_task_and_uses_bounded_batches(self):
+        cfg_path = Path(__file__).resolve().parents[1] / 'config/research/pusht_mac.yaml'
+        args = parser().parse_args(['run', '--cases', 'c', '--output', 'r', '--config', str(cfg_path)])
+        cfg = _load_cfg(args)
+        self.assertEqual(cfg['device'], 'mps')
+        self.assertEqual(cfg['candidate_batch_size'], 16)
+        self.assertEqual((cfg['horizon'], cfg['receding_horizon'], cfg['action_block'], cfg['eval_budget']), (5, 5, 5, 50))
+        args = parser().parse_args(['run', '--cases', 'c', '--output', 'r', '--config', str(cfg_path), '--device', 'cpu'])
+        self.assertEqual(_load_cfg(args)['device'], 'cpu')
 
     def test_snapshots_enable_diagnostics(self):
         args = parser().parse_args(['run', '--cases', 'c', '--output', 'r', '--save-snapshots'])
@@ -124,6 +135,20 @@ class Contracts(unittest.TestCase):
             path.write_text(content + '\n')
             with self.assertRaises(ValueError):
                 budget_rows([a])
+
+    def test_budget_pool_rejects_mixed_batches_and_backends(self):
+        a = self.fixture_run('a')
+        for name in ('batch', 'backend'):
+            b = self.fixture_run(name, n=100)
+            path = b / 'run_metadata.json'
+            meta = json.loads(path.read_text())
+            if name == 'batch':
+                meta['config']['candidate_batch_size'] = 16
+            else:
+                meta['execution']['device'] = 'mps'
+            path.write_text(json.dumps(meta))
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                budget_rows([a, b])
 
     def test_imports_stay_lightweight(self):
         for name in ('torch', 'numpy', 'gymnasium', 'stable_worldmodel', 'matplotlib'):
