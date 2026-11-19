@@ -1,4 +1,5 @@
 # Python and local tooling
+.DS_Store
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
@@ -9,12 +10,16 @@
 **/.venv-mac/
 
 # Local experiment artifacts and downloaded runtime data
+/.cache/mineru-paper-reader/
 **/runs/
 **/outputs/
 **/checkpoints/
 **/datasets/
 **/*.h5
+**/*.hdf5
 **/*.pt
+**/*.pth
+**/*.safetensors
 **/*.ckpt
 **/*.mp4
 **/*.npy
@@ -23,3 +28,7 @@
 
 # Existing local reference artifact; keep it on disk without committing it.
 le-wm/arxiv_*.pdf
+
+# Machine-local Cube configuration and evaluator snapshots
+le-wm/config/research/cube-local.yaml
+**/evaluator_snapshot.pkl

@@ -32,6 +32,26 @@ dependencies = [
 swm = "stable_worldmodel.cli:app"
 
 [project.optional-dependencies]
+cube-research = [
+    "transformers>=4.50.0",
+    "stable-pretraining",
+    "hydra-core",
+    "scikit-learn",
+    "scipy",
+    "pyyaml",
+    "mujoco==3.3.6",
+    "dm-control==1.0.34",
+    "ogbench==1.2.0",
+    "gymnasium>=1.1,<2",
+    # Cube's existing shared env utils imports these too.
+    "pygame",
+    "pymunk>=7,<8",
+    "shapely",
+    "pillow",
+    "pytest",
+    "huggingface_hub",
+]
+
 pusht-research = [
     "transformers>=4.50.0",
     "stable-pretraining",

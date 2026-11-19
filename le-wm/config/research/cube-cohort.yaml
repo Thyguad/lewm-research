@@ -1,0 +1,22 @@
+# Applied only by screen and run --cohort. Input paths and device come from
+# the base config or CLI. Freeze this file before observing screening results.
+planning:
+  horizon: 5
+  action_block: 5
+  execute_blocks: 5
+  total_steps: 50
+  goal_offset: 25
+  history_steps: 25
+  cem_samples: 300
+  cem_iterations: 10
+  cem_elites: 30
+  score_batch_size: 300
+  sensors: rgb
+  planning_seeds: [142]
+screening:
+  order_seed: 20261119
+  seeds: [42, 43]
+  candidates_per_batch: 6
+  max_admitted: 3
+  minimum_object_motion_m: 0.01
+  require_pad_contact: true

@@ -814,12 +814,12 @@ class CubeEnv(ManipSpaceEnv):
 
         swm_spaces.reset_variation_space(
             self.variation_space,
-            seed=None,
+            seed=seed,
             options=options,
             default_variations=DEFAULT_VARIATIONS,
         )
 
-        ob, info = super().reset(options=options, *args, **kwargs)
+        ob, info = super().reset(seed=seed, options=options, *args, **kwargs)
 
         if 'state' in options and options['state'] is not None:
             state = options['state']
