@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cube_research import experiments, model, simulator
-from cube_research.protocol import read_config, Observation, digest
+from cube_research.protocol import read_config, Ledger, Observation, digest
 from research_common import write_json, read_json, file_hash
 
 
@@ -78,6 +78,34 @@ class Data:
 
     def close(self):
         pass
+
+
+def test_cohort_frozen_branch_preserves_rng_and_early_success_does_not_adapt():
+    cfg = read_config(Path(__file__).resolve().parents[1] / 'config/research/cube.yaml')
+    cfg.update(total_steps=12, history_steps=5, horizon=1, execute_blocks=1,
+               cem_samples=4, cem_elites=2, cem_iterations=1, adapt_steps=1)
+    bridge, env = Model(cfg, {}), Env()
+    goal = np.full((224, 224, 3), 50, np.uint8)
+    ledger, seed = Ledger(12), 142
+    history, truth, goal_z, _, planner = experiments.start_frozen(cfg, bridge, seed, ledger, env, goal)
+    experiments.execute(env, history, truth, planner, bridge, ledger, 5, 'history', goal_z)
+    prefix = copy.deepcopy((history, truth, ledger))
+    snap = env.snapshot(planner)
+    rng = copy.deepcopy(planner.rng.bit_generator.state)
+    experiments.execute(env, history, truth, planner, bridge, ledger, 7, 'recovery', goal_z)
+    for method in ('Frozen', 'R-I', 'R-D', 'R-U'):
+        env.restore(snap, planner)
+        h, t, ll = copy.deepcopy(prefix)
+        assert env.t == 5 and h.fingerprint() == prefix[0].fingerprint()
+        adapter = experiments.recover(env, h, t, bridge, goal_z, method, cfg, seed, ll, rng)
+        assert ll.used == 12 and adapter.record()['training_rows'] == (0 if method == 'Frozen' else 1)
+        if method == 'Frozen':
+            np.testing.assert_array_equal(h.actions, history.actions)
+        env.restore(snap, planner)
+        h, t, ll = copy.deepcopy(prefix)
+        t[-1]['success'] = True
+        fresh = experiments.recover(env, h, t, bridge, goal_z, method, cfg, seed, ll, rng)
+        assert env.t == ll.used == 5 and ll.updates == 0 and not fresh.trace and fresh.gain == 1
 
 
 def test_real_runner_orchestration_shared_history_budgets_and_artifacts(tmp_path, monkeypatch):

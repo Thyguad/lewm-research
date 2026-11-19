@@ -29,9 +29,15 @@ def parser():
     q.add_argument("--split", choices=["dev", "train", "test"], default="dev")
     q.add_argument("--limit", type=int, default=3)
     q.add_argument("--case-id")
+    q.add_argument("--cohort", help="sealed development cohort from screen")
+    q.add_argument("--paired-e0", help="completed E0 with intervention audit; required for cohort E1")
     q.add_argument("--lock")
     q.add_argument("--diagnostic")
     q.add_argument("--smoke", action="store_true")
+    q = sub.add_parser("screen")
+    q.add_argument("--cases", required=True)
+    q.add_argument("--out", required=True)
+    q.add_argument("--batch", type=int, default=0)
     q = sub.add_parser("audit")
     q.add_argument("--cases", required=True)
     q.add_argument("--out", required=True)
@@ -59,6 +65,11 @@ def main():
         cfg["dataset"] = str(Path(cfg["dataset"]).expanduser().resolve())
     if cfg["weights"]:
         cfg["weights"] = str(Path(cfg["weights"]).expanduser().resolve())
+    rules = None
+    if args.command == "screen" or getattr(args, "cohort", None):
+        from cube_research.cohort import profile
+
+        cfg, rules = profile(cfg)
     validate_config(cfg)
     if cfg["render_backend"] != "auto":
         import os
@@ -109,11 +120,19 @@ def main():
         from cube_research.experiments import lock
 
         lock(cfg, args.cases, args.out, args.diagnostic)
+    elif args.command == "screen":
+        from cube_research.cohort import screen
+
+        return int(not screen(cfg, rules, args.cases, args.out, args.batch))
     elif args.command == "run":
         from cube_research.experiments import run
 
         if args.limit <= 0:
             raise ValueError("--limit must be positive")
+        if args.cohort and args.stage in ("e0", "e1"):
+            args.limit = 1
+        if args.paired_e0 and not (args.cohort and args.stage == "e1"):
+            raise ValueError("--paired-e0 is only for cohort E1")
         if args.smoke:
             if args.split != "dev" or args.stage != "e1":
                 raise ValueError("Smoke uses dev E1 only")
@@ -143,6 +162,8 @@ def main():
                 args.diagnostic,
                 args.smoke,
                 args.case_id,
+                args.cohort,
+                args.paired_e0,
             )
         )
     elif args.command == "audit":

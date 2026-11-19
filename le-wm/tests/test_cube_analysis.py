@@ -57,3 +57,26 @@ def test_empty_cross_table_has_no_fabricated_values(tmp_path):
     write_json(r / "plan.json", [])
     summarize([r], tmp_path / "s")
     assert "| N | — | — | — | — |" in (tmp_path / "s/cross-table.md").read_text()
+
+
+def test_early_success_counts_for_task_but_not_recovery_gain(tmp_path):
+    root = tmp_path / 'run'
+    root.mkdir()
+    write_json(root / 'metadata.json', dict(protocol_sha256='a', manifest_sha256='b', split='dev', smoke=False))
+    write_json(root / 'STATUS.json', dict(state='complete'))
+    plan = []
+    for method in ('Frozen', 'R-I'):
+        row = dict(case_id='case', planning_seed=142, condition='N', strategy='passive',
+                   extra_budget=0, method=method)
+        folder = root / 'recoveries' / method
+        folder.mkdir(parents=True)
+        write_json(folder / 'result.json', dict(row, status='complete', success=True,
+                   environment_steps=1, recovery_state='early_success'))
+        plan.append(row)
+    write_json(root / 'plan.json', plan)
+    summarize([root], tmp_path / 'summary')
+    out = read_json(tmp_path / 'summary/summary.json')
+    assert out['paired'][0]['independent_cases'] == 0
+    assert out['paired'][0]['mean_success_difference'] is None
+    assert out['paired'][0]['early_success_seed_pairs'] == 1
+    assert all(r['success_rate'] == 1 and r['early_success_before_recovery_runs'] == 1 for r in out['cells'])

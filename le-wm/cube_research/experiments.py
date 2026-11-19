@@ -132,21 +132,32 @@ def execute(harness, history, truth, planner, model, ledger, count, phase, goal_
         truth.append(evaluation)
 
 
+def start_frozen(cfg, model, seed, ledger, harness, goal):
+    from .model import Planner
+
+    goal_z = model.encode([goal], ledger)[0]
+    history, truth = History([harness.observe()]), [harness.evaluate()]
+    adapter = Adapter(model, "Frozen", policy_config(cfg), ledger)
+    return history, truth, goal_z, adapter, Planner(adapter, policy_config(cfg), seed)
+
+
 def save_history(path, history, truth, goal):
     np.savez_compressed(path / "allowed.npz", **history.arrays(), goal=goal)
     write_json(path / "evaluation.json", truth)
 
 
-def recover(harness, history, truth, model, goal_z, method, cfg, seed, ledger):
+def recover(harness, history, truth, model, goal_z, method, cfg, seed, ledger, rng_state=None):
     from .model import Planner
 
     adapter = Adapter(model, method, policy_config(cfg), ledger)
-    if not truth[-1]["success"]:
+    if method != "Frozen" and not (truth[-1]["success"] or truth[-1]["truncated"]):
         embeddings = model.encode([o.pixels for o in history.observations], ledger)
         adapter.fit(embeddings, np.asarray(history.actions))
     planner = Planner(
         adapter, policy_config(cfg), seed
     )  # always fresh optimizer, RNG and empty action buffer
+    if rng_state is not None:
+        planner.rng.bit_generator.state = copy.deepcopy(rng_state)
     execute(
         harness,
         history,
@@ -172,6 +183,8 @@ def run(
     diagnostic_path=None,
     smoke=False,
     case_id=None,
+    cohort=None,
+    paired_e0=None,
 ):
     from .model import FrozenModel, Planner
     from .simulator import make_env
@@ -192,6 +205,8 @@ def run(
             case_id=case_id,
             smoke=smoke,
             manifest=str(manifest),
+            cohort=str(cohort) if cohort else None,
+            paired_e0=str(paired_e0) if paired_e0 else None,
             runtime=runtime_metadata(),
         ),
     )
@@ -203,7 +218,11 @@ def run(
             raise ValueError("Goal offset differs from the case manifest")
         if m["protocol"] != cfg["protocol"] or m["dataset_source"] != cfg["dataset_source"]:
             raise ValueError("Manifest and config protocol/data identity mismatch")
-        if m["dataset_sha256"] != file_hash(cfg["dataset"]):
+        if cohort:
+            from .cohort import load_cohort
+
+            selected_cases = load_cohort(cfg, manifest, m, cohort, stage, split, case_id, smoke, paired_e0)
+        elif m["dataset_sha256"] != file_hash(cfg["dataset"]):
             raise ValueError("Dataset content changed after split/stats freezing")
         if split == "test":
             locked = check_lock(cfg, manifest, lock_path)
@@ -229,7 +248,7 @@ def run(
             if metadata["weights_sha256"] != file_hash(cfg["weights"]):
                 raise ValueError("Diagnostic used a different world model")
             diagnostic = Diagnostic.load(Path(diagnostic_path) / "diagnostic.npz")
-        cases = [
+        cases = selected_cases[:limit] if cohort else [
             x
             for x in m["cases"]
             if x["split"] == split and (case_id is None or x["case_id"] == case_id)
@@ -268,6 +287,8 @@ def run(
         write_json(root / "plan.json", plan)
         meta = provenance(cfg, manifest)
         meta.update(stage=stage, split=split, smoke=smoke, case_count=len(cases))
+        if cohort:
+            meta.update(cohort_sha256=file_hash(cohort), cohort_scope="selected dev only")
         if diagnostic_path:
             meta["diagnostic_sha256"] = file_hash(Path(diagnostic_path) / "diagnostic.npz")
             meta["diagnostic_metadata"] = read_json(Path(diagnostic_path) / "metadata.json")
@@ -293,11 +314,9 @@ def run(
                             )
                             prefix_started = time.perf_counter()
                             prefix_ledger = Ledger(cfg["total_steps"])
-                            goal_z = model.encode([goal], prefix_ledger)[0]
-                            history = History([harness.observe()])
-                            truth = [harness.evaluate()]
-                            frozen = Adapter(model, "Frozen", policy_config(cfg), prefix_ledger)
-                            prefix_planner = Planner(frozen, policy_config(cfg), seed)
+                            history, truth, goal_z, frozen, prefix_planner = start_frozen(
+                                cfg, model, seed, prefix_ledger, harness, goal
+                            )
                             execute(
                                 harness,
                                 history,
@@ -313,6 +332,7 @@ def run(
                             # prefix action buffer; restore it before EVERY strategy.
                             prefix_seconds = time.perf_counter() - prefix_started
                             snap = harness.snapshot(prefix_planner)
+                            rng_state = copy.deepcopy(prefix_planner.rng.bit_generator.state) if cohort else None
                             check_actions = np.array([[0.02, 0, 0, 0, 0], [0, 0.02, 0, 0, 0]])
                             check = harness.replay_check(
                                 check_actions, prefix_ledger, prefix_planner
@@ -329,6 +349,8 @@ def run(
                                     policy_config(cfg),
                                     seed,
                                 )
+                                if rng_state is not None:
+                                    planner.rng.bit_generator.state = copy.deepcopy(rng_state)
                                 probe_name = None
                                 phase = None
                                 if strategy in ("fixed", "random"):
@@ -383,6 +405,8 @@ def run(
                                         strategy=strategy,
                                         extra_budget=budget,
                                         actual_extra_steps=ledger.used - prefix_ledger.used,
+                                        prefix_success=bool(truth[-1]["success"]),
+                                        prefix_steps=prefix_ledger.used,
                                         probe=probe_name,
                                         observable_phase=phase,
                                         history_sha256=h.fingerprint(),
@@ -446,6 +470,7 @@ def run(
                                                 cfg,
                                                 seed,
                                                 ll,
+                                                rng_state,
                                             )
                                             if stage != "e0"
                                             else frozen
@@ -459,6 +484,10 @@ def run(
                                             distance=tt[-1]["distance"],
                                             task_loss=float(not success),
                                             initial_success=bool(tt[0]["success"]),
+                                            prefix_success=bool(truth[-1]["success"]) if stage != "e0" else None,
+                                            recovery_state=("not_applicable" if stage == "e0" else
+                                                            "early_success" if t[-1]["success"] else
+                                                            "truncated" if t[-1]["truncated"] else "decision"),
                                             termination="success"
                                             if success
                                             else "environment_truncated"
@@ -532,6 +561,12 @@ def run(
                                 harness.close()
         finally:
             data.close()
+        if cohort and stage == "e0" and not failures and len(completed) == len(plan):
+            from .cohort_pair import verify_pair
+
+            offline = verify_pair(cfg, m, cases[0], root)
+            actual_steps += offline
+            actual_offline_steps += offline
         finish_run(
             root,
             "complete" if not failures and len(completed) == len(plan) else "incomplete",

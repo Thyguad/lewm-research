@@ -24,6 +24,7 @@ def summarize(roots, out, seed=99):
                 meta["smoke"],
                 meta.get("weights_sha256"),
                 meta.get("model_config_sha256"),
+                meta.get("cohort_sha256"),
             )
         )
         run_status.append(dict(path=str(root), status=read_json(root / "STATUS.json")))
@@ -109,6 +110,7 @@ def summarize(roots, out, seed=99):
                 if any("ledger" in r for r in rows)
                 else None,
                 initially_successful_runs=sum(bool(r.get("initial_success")) for r in rows),
+                early_success_before_recovery_runs=sum(r.get("recovery_state") == "early_success" for r in rows),
                 excluded_from_observed_estimate=[
                     dict(
                         case_id=r["case_id"],
@@ -130,11 +132,15 @@ def summarize(roots, out, seed=99):
             continue
         by_case = defaultdict(list)
         omitted = []
+        early = 0
         for r in rows:
             key = (r["case_id"], condition, r["planning_seed"], strategy, budget, "Frozen")
             base = actual.get(key)
             if r["status"] == "complete" and base and base["status"] == "complete":
-                by_case[r["case_id"]].append(float(r["success"]) - float(base["success"]))
+                if r.get("recovery_state") == "early_success" or base.get("recovery_state") == "early_success":
+                    early += 1
+                else:
+                    by_case[r["case_id"]].append(float(r["success"]) - float(base["success"]))
             else:
                 omitted.append(r["case_id"])
         # Incomplete seed pairs invalidate that case, not just the failed seed.
@@ -156,6 +162,7 @@ def summarize(roots, out, seed=99):
                 mean_success_difference=float(diffs.mean()) if len(diffs) else None,
                 case_bootstrap_95=interval,
                 missing_case_pairs=sorted(set(omitted)),
+                early_success_seed_pairs=early,
             )
         )
     strategy_pairs = []
@@ -170,6 +177,7 @@ def summarize(roots, out, seed=99):
                 continue
             by_case = defaultdict(list)
             missing = []
+            early = 0
             for r in rows:
                 key = (
                     r["case_id"],
@@ -181,7 +189,10 @@ def summarize(roots, out, seed=99):
                 )
                 baseline = actual.get(key)
                 if r["status"] == "complete" and baseline and baseline["status"] == "complete":
-                    by_case[r["case_id"]].append(float(r["success"]) - float(baseline["success"]))
+                    if r.get("prefix_success") or baseline.get("prefix_success"):
+                        early += 1
+                    else:
+                        by_case[r["case_id"]].append(float(r["success"]) - float(baseline["success"]))
                 else:
                     missing.append(r["case_id"])
             for cid in missing:
@@ -201,6 +212,7 @@ def summarize(roots, out, seed=99):
                     extra_budget=budget,
                     independent_cases=len(diffs),
                     missing_case_pairs=sorted(set(missing)),
+                    early_success_seed_pairs=early,
                     success_difference=float(diffs.mean()) if len(diffs) else None,
                     case_bootstrap_95=ci,
                 )

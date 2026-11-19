@@ -1,4 +1,5 @@
 # Python and local tooling
+.DS_Store
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
@@ -15,7 +16,10 @@
 **/checkpoints/
 **/datasets/
 **/*.h5
+**/*.hdf5
 **/*.pt
+**/*.pth
+**/*.safetensors
 **/*.ckpt
 **/*.mp4
 **/*.npy
