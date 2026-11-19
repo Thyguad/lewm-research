@@ -1,5 +1,7 @@
 # Cube E0–E2：运行、审计与继续条件
 
+**正常基线先行：**见 [Cube 参考复现核查](README_cube_reference.md)。独立入口 `cube_reference.py` 不使用下面的研究 planner；两例 N 回归已跑完，正式 50-case 和 E1/E2 尚未启动。
+
 本入口建立实验基础，不宣称 I 与 D 已混淆、短试探有效或形成了新的主动辨识方法。
 基于 `a1158f1b9b8281c8afa0ddbec9d0a884648d58a2`：核查时 main 无后续 Cube 代码/结果、无 AGENTS.md、无开放 PR。历史 PushT 结果及所有原运行入口保留。
 
