@@ -76,12 +76,14 @@ def terminal_embedding(adapter, embedding, candidates):
 
 
 class Planner:
-    def __init__(self, adapter, cfg, seed, *, terminal_cost=None):
+    def __init__(self, adapter, cfg, seed, *, terminal_cost=None, candidate_observer=None):
         self.adapter, self.cfg = adapter, cfg
         self.rng = np.random.default_rng(seed)
         self.buffer = []
         self.terminal_cost = terminal_cost
         self.scoring_seconds = 0.0
+        # Optional read-only research hook. It must not mutate candidates/costs.
+        self.candidate_observer = candidate_observer
 
     def reset_buffer(self):
         self.buffer = []
@@ -119,6 +121,8 @@ class Planner:
                 else self.terminal_cost(terminal, goal)
             )
             self.scoring_seconds += time.perf_counter() - score_started
+            if self.candidate_observer is not None:
+                self.candidate_observer(candidates.copy(), costs.copy(), False)
             elite = normalized[np.argsort(costs)[: c["cem_elites"]]]
             mean, std = elite.mean(0), np.maximum(elite.std(0), 0.03)
             ledger.count("cem_score", len(candidates))
@@ -128,6 +132,9 @@ class Planner:
         plan = np.clip(
             mean[: c["execute_blocks"]] * action_scale + action_mean, -1, 1
         ).astype(np.float32).reshape(-1, 5)
+        if self.candidate_observer is not None:
+            full_mean = np.clip(mean * action_scale + action_mean, -1, 1).astype(np.float32)
+            self.candidate_observer(full_mean[None], None, True)
         self.buffer = [v.copy() for v in plan]
         sync_device(self.adapter.model.device)
         ledger.planning_seconds += time.perf_counter() - started

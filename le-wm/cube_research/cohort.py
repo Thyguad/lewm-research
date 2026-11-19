@@ -77,11 +77,13 @@ def compatible_contract(sealed, current):
     if sealed == current:
         return True
     # Exact source versions with compatible legacy Frozen behavior. The newest
-    # adds an opt-in scoring callback; default CEM commands and counts are unchanged.
+    # adds opt-in scoring/archive callbacks; default CEM commands and counts are unchanged.
     previous = '1cb418cfe21e49441478733a08ff9f59dc69998265f7391ef385738ba8dcd7fe'
     reviewed = '8a3c8edf9cefc3e0cf9e78891b0d337a4d69dd45ddf302dd518807725236f2aa'
     with_scoring_hook = 'e9f24675f07ab97f3a50087ccc1cb5a4eb0d7cef399196ffd4dc0be281213cd3'
-    allowed = {reviewed: (previous,), with_scoring_hook: (previous, reviewed)}
+    with_archive_hook = '920cfbe13abb51ad75318353b424e80c6c76bf6fe702f77ebccc84def181a558'
+    allowed = {reviewed: (previous,), with_scoring_hook: (previous, reviewed),
+               with_archive_hook: (previous, reviewed, with_scoring_hook)}
     return any(dict(current, frozen_source_sha256=old) == sealed
                for old in allowed.get(current['frozen_source_sha256'], ()))
 

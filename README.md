@@ -9,6 +9,7 @@
 - Cube 现有能力与入口：[le-wm/README_cube.md](le-wm/README_cube.md)。
 - Cube 参考评估入口：[le-wm/README_cube_reference.md](le-wm/README_cube_reference.md)。
 - Cube 目标集合规划：[le-wm/README_goal_set.md](le-wm/README_goal_set.md)。
+- Cube 执行监督的动作块价值：[le-wm/README_prefix_value.md](le-wm/README_prefix_value.md)。
 - PushT 可复用工具：[le-wm/README_frozen_diagnostics.md](le-wm/README_frozen_diagnostics.md)。
 - 旧研究与文档查阅：[docs/history.md](docs/history.md)。
 

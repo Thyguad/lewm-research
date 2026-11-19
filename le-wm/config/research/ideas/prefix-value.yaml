@@ -1,0 +1,46 @@
+protocol: cube-prefix-value-v1
+dataset: null
+weights: null
+device: auto
+render_backend: auto
+sensors: rgb
+action_dim: 5
+action_block: 5
+image_size: 224
+goal_offset: 25
+total_steps: 50
+success_distance_m: 0.04
+horizon: 5
+execute_blocks: 1
+cem_samples: 300
+cem_iterations: 10
+cem_elites: 30
+score_batch_size: 64
+environment_seed: 1234
+split_seed: 20261120
+train_states: 128
+calibration_states: 32
+calibration_trajectories: 16
+warmup_steps: [0, 5, 10, 15, 20]
+dev_seeds: [42, 43]
+test_seeds: [142, 143, 144]
+bootstrap_seed: 99
+collection_seed: 31415
+pool:
+  size: 16
+  archive_per_iteration: 30
+  edits: 4
+  edit_scale: 0.5
+  branches: 6
+training:
+  hidden: 256
+  steps: 4000
+  evaluate_every: 100
+  batch_states: 8
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  ranking_weight: 0.2
+  tie_tolerance: 0.02
+  ranking_temperature: 0.1
+  seed: 2718
+  cpu_threads: 2
