@@ -177,8 +177,8 @@ class Harness:
             condition=self.condition,
             interface_scale=self.scale,
             friction_scale=self.cfg["friction_scale"] if self.condition == "D" else 1.0,
-            control_timestep=self.env.control_timestep,
-            physics_timestep=self.env.physics_timestep,
+            control_timestep=self.env.control_timestep(),
+            physics_timestep=self.env.physics_timestep(),
             geoms=[
                 dict(
                     name=n,

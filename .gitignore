@@ -9,6 +9,7 @@
 **/.venv-mac/
 
 # Local experiment artifacts and downloaded runtime data
+/.cache/mineru-paper-reader/
 **/runs/
 **/outputs/
 **/checkpoints/

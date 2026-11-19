@@ -79,10 +79,25 @@ class Planner:
         c, ledger = self.cfg, self.adapter.ledger
         started = time.perf_counter()
         shape = (c["horizon"], c["action_block"], c["action_dim"])
+        # CEM is defined in the model's normalized action space. Sampling raw
+        # environment commands and normalizing afterward produces values far
+        # outside the training distribution because the dataset scales are
+        # much smaller than the executable [-1, 1] range.
         mean, std = np.zeros(shape), np.ones(shape)
+        stats = getattr(self.adapter.model, "stats", None) or {}
+        action_mean = np.asarray(stats.get("mean", np.zeros(5)))
+        action_scale = np.asarray(stats.get("scale", np.ones(5)))
+        evaluated = None
         for _ in range(c["cem_iterations"]):
+            normalized = self.rng.normal(
+                mean, std, (c["cem_samples"], *shape)
+            ).astype(np.float32)
+            # Keep the current distribution mean as an evaluated candidate,
+            # matching the reference CEM and preventing a regression to a
+            # random final sample when the elite distribution has converged.
+            normalized[0] = mean
             candidates = np.clip(
-                self.rng.normal(mean, std, (c["cem_samples"], *shape)), -1, 1
+                normalized * action_scale + action_mean, -1, 1
             ).astype(np.float32)
             z = np.repeat(embedding[None, None], len(candidates), axis=0)
             for h in range(c["horizon"]):
@@ -91,11 +106,16 @@ class Planner:
                 pred = self.adapter.predict(z[:, -3:], a)
                 z = np.concatenate((z, pred[:, None]), axis=1)
             costs = np.sum((z[:, -1] - goal) ** 2, axis=1)
-            elite = candidates[np.argsort(costs)[: c["cem_elites"]]]
+            elite = normalized[np.argsort(costs)[: c["cem_elites"]]]
             mean, std = elite.mean(0), np.maximum(elite.std(0), 0.03)
+            evaluated = (candidates, costs)
             ledger.count("cem_score", len(candidates))
-        # Execute best evaluated sequence; mean was not itself evaluated.
-        plan = candidates[int(np.argmin(costs))][: c["execute_blocks"]].reshape(-1, 5)
+        # Execute the final CEM mean, as in the reference solver. A single
+        # sampled elite can contain a one-step discontinuity that is unsafe
+        # for contact-rich manipulation even when its predicted cost is low.
+        plan = np.clip(
+            mean[: c["execute_blocks"]] * action_scale + action_mean, -1, 1
+        ).astype(np.float32).reshape(-1, 5)
         self.buffer = [v.copy() for v in plan]
         sync_device(self.adapter.model.device)
         ledger.planning_seconds += time.perf_counter() - started
