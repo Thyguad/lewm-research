@@ -10,13 +10,17 @@ import time
 import numpy as np
 from .protocol import METHODS, transform_command
 
+GAIN_BOUNDS = (0.25, 4.0)
+
 
 class Adapter:
     def __init__(self, model, method, cfg, ledger):
         if method not in METHODS:
             raise ValueError(method)
         self.model, self.method, self.cfg, self.ledger = model, method, cfg, ledger
-        self.gain = 1.0
+        self.xyz = cfg.get("interface_parameterization", "scalar") == "xyz"
+        self.gain = [1.0] * 3 if self.xyz else 1.0
+        self.objective_evaluations = 0
         self.projection = np.random.default_rng(cfg["adapt_seed"]).normal(
             size=(model.dim, cfg["residual_rank"])
         ) / np.sqrt(model.dim)
@@ -51,7 +55,8 @@ class Adapter:
         self.training_rows = len(y)
 
         def objective(log_gain):
-            gain = float(np.exp(log_gain))
+            self.objective_evaluations += 1
+            gain = np.exp(log_gain) if self.xyz else float(np.exp(log_gain))
             effective = transform_command(a, gain)
             p = self.model.predict(z, effective, self.ledger).astype(np.float64)
             w = np.zeros_like(self.weights)
@@ -61,30 +66,33 @@ class Adapter:
                 w = np.linalg.solve(x.T @ x + len(x) * reg * np.eye(x.shape[1]), x.T @ (y - p))
                 p += x @ w
             loss = float(
-                np.mean((p - y) ** 2) + reg * np.sum(w * w) / self.model.dim + reg * log_gain**2
+                np.mean((p - y) ** 2) + reg * np.sum(w * w) / self.model.dim
+                + reg * (np.sum(log_gain**2) if self.xyz else log_gain**2)
             )
             if not np.isfinite(loss):
                 raise FloatingPointError("Non-finite adaptation objective")
             return loss, w
 
-        log_gain = 0.0
+        log_gain = np.zeros(3) if self.xyz else 0.0
         loss, weights = objective(log_gain)
         steps = 1 if self.method == "R-D" else self.cfg["adapt_steps"]
         radius = self.cfg["adapt_search_radius"]
         for step in range(steps):
             if self.method != "R-D":
                 choices = [(loss, log_gain, weights)]
-                for direction in (-1, 1):
-                    candidate = float(
-                        np.clip(log_gain + direction * radius, np.log(0.25), np.log(4))
-                    )
-                    value, w = objective(candidate)
-                    choices.append((value, candidate, w))
+                axes = np.eye(3) if self.xyz else (1,)
+                for axis in axes:
+                    for direction in (-1, 1):
+                        candidate = np.clip(log_gain + direction * radius * axis, *np.log(GAIN_BOUNDS))
+                        if not self.xyz:
+                            candidate = float(candidate)
+                        value, w = objective(candidate)
+                        choices.append((value, candidate, w))
                 value, gain_candidate, weights = min(choices, key=lambda x: x[0])
-                if gain_candidate == log_gain:
+                if np.array_equal(gain_candidate, log_gain):
                     radius *= 0.5
                 log_gain, loss = gain_candidate, value
-            self.gain = float(np.exp(log_gain))
+            self.gain = np.exp(log_gain).tolist() if self.xyz else float(np.exp(log_gain))
             self.weights = weights
             self.ledger.updates += 1
             self.trace.append(
@@ -104,7 +112,7 @@ class Adapter:
             residual=self.weights.tolist(),
             projection_seed=self.cfg["adapt_seed"],
             parameter_count=(
-                int(self.method in ("R-I", "R-U"))
+                int(self.method in ("R-I", "R-U")) * (3 if self.xyz else 1)
                 + (self.weights.size if self.method in ("R-D", "R-U") else 0)
             ),
             updated_backbone_parameters=0,
@@ -112,4 +120,10 @@ class Adapter:
             training_rows=getattr(self, "training_rows", 0),
             updates=self.trace,
             initialization="gain=1; residual=0; fixed seeded projection; no persistent optimizer",
+            interface_parameterization="xyz" if self.xyz else "scalar",
+            interface_bounds=GAIN_BOUNDS,
+            objective_evaluations=self.objective_evaluations,
+            regularization=self.cfg["adapt_regularization"],
+            initial_search_radius=self.cfg["adapt_search_radius"],
+            update_definition="one accepted-or-retained search iterate; R-D one ridge fit",
         )

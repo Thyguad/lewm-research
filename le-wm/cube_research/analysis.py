@@ -7,6 +7,80 @@ from research_common import read_json, write_json
 from .protocol import CONDITIONS, METHODS
 
 KEY = ("case_id", "condition", "planning_seed", "strategy", "extra_budget", "method")
+GRID_ID = ('case_id', 'planning_seed', 'perturbation_id', 'condition', 'perturbation_family',
+           'xyz_gain', 'pad_friction_scale')
+
+
+def grid_rows(root, plan):
+    """One row per sealed arm. Compare only to the same case and seed's N."""
+    root = Path(root)
+    expected = {(r['case_id'], r['planning_seed'], r['perturbation_id']): r for r in plan['entries']}
+    if len(expected) != len(plan['entries']):
+        raise ValueError('Duplicate grid entry')
+    actual, audits = {}, {}
+    for sub in sorted(root.glob('position-*')):
+        paths = sorted((sub / 'recoveries').glob('*/result.json'))
+        failures = sorted(sub.glob('failure-*.json'))
+        if not paths and not failures:
+            continue
+        metadata = read_json(sub / 'metadata.json')
+        if (metadata.get('extension_seal') != plan['seal_sha256']
+                or metadata.get('experiment_protocol') != plan['experiment_protocol']
+                or metadata.get('cohort_sha256') != plan['cohort_sha256']
+                or metadata.get('config') != plan['config']):
+            raise ValueError('Cannot pool or reuse receipts with a different sealed execution identity')
+        receipt_audit = sub / 'matched-command-audit/audit.json'
+        audit = read_json(receipt_audit) if receipt_audit.exists() else {}
+        for p in paths + failures:
+            r = read_json(p)
+            key = r['case_id'], r['planning_seed'], r['perturbation_id']
+            exp = expected.get(key)
+            if (not exp or any(r.get(k) != exp[k] for k in GRID_ID)
+                    or exp['cohort_position'] != metadata['cohort_position']):
+                raise ValueError('Result does not match sealed case, seed or perturbation')
+            if p in failures and key in actual:
+                continue  # The inner failed result already holds the detailed receipt.
+            if key in actual:
+                raise ValueError('Duplicate grid result')
+            trajectory = p.parent / 'evaluation.json'
+            if p in failures:
+                trajectory = sub / 'failed-prefix' / '-'.join(map(str, key)) / 'evaluation.json'
+            truth = read_json(trajectory) if trajectory.exists() else []
+            actual[key] = (r, truth)
+            audits[key] = audit.get(r['perturbation_id'])
+
+    rows = []
+    for key, entry in expected.items():
+        r, ts = actual.get(key, ({}, []))
+        termination = r.get('termination')
+        observed = r.get('status') == 'complete' and termination in ('success', 'budget')
+        success = r['success'] if observed else None
+        n = actual.get((*key[:2], 'N'), ({}, []))[0]
+        valid_pair = observed and n.get('status') == 'complete' and n.get('termination') in ('success', 'budget')
+        ledger = r.get('ledger', {})
+        audit = audits.get(key)
+        rows.append(dict(entry, status='success' if success else 'task_failure' if observed
+                         else 'execution_error' if r.get('status') == 'failed' else 'unfinished',
+                         success=success, first_success_step=r.get('first_success_step') if success else None,
+                         termination=termination, reason=r.get('reason', 'No recorded execution' if not r else None),
+                         initial_distance_m=ts[0]['distance'] if ts else None,
+                         min_distance_m=min(t['distance'] for t in ts) if ts else None,
+                         final_distance_m=ts[-1]['distance'] if ts else None,
+                         success_delta_vs_n=int(success) - int(n['success']) if valid_pair else None,
+                         first_success_step_delta_vs_n=(r['first_success_step'] - n['first_success_step']
+                                                        if valid_pair and success and n['success'] else None),
+                         unfinished_at_decision=bool(r.get('environment_steps', 0) >= plan['config']['history_steps']
+                                                     and (not success or r['first_success_step'] > plan['config']['history_steps'])),
+                         audit=audit, verified_task_loss=bool(valid_pair and n['success'] and not success
+                                                   and audit and audit['physical_response_verified']),
+                         model=ledger.get('model'), planning_seconds=ledger.get('planning_seconds'),
+                         wall_seconds=r.get('wall_seconds'), online_steps=r.get('environment_steps',
+                                                                              sum(ledger['phases'].values()) if ledger else None),
+                         offline_snapshot_steps=ledger.get('offline_replay_steps'),
+                         offline_snapshot_seconds=r.get('snapshot_replay_seconds'),
+                         offline_matched_steps=audit['offline_steps'] if audit else None,
+                         offline_matched_seconds=audit['offline_seconds'] if audit else None))
+    return rows
 
 
 def summarize(roots, out, seed=99):

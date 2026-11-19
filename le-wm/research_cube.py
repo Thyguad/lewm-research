@@ -30,6 +30,7 @@ def parser():
     q.add_argument("--limit", type=int, default=3)
     q.add_argument("--case-id")
     q.add_argument("--cohort", help="sealed development cohort from screen")
+    q.add_argument("--cohort-position", type=int, help="1-based position in the sealed cohort (E0 only)")
     q.add_argument("--paired-e0", help="completed E0 with intervention audit; required for cohort E1")
     q.add_argument("--lock")
     q.add_argument("--diagnostic")
@@ -38,6 +39,10 @@ def parser():
     q.add_argument("--cases", required=True)
     q.add_argument("--out", required=True)
     q.add_argument("--batch", type=int, default=0)
+    q = sub.add_parser("perturb-e0", help="sealed two-case perturbation grid; Frozen only")
+    q.add_argument("--cases", required=True)
+    q.add_argument("--cohort", required=True)
+    q.add_argument("--out", required=True)
     q = sub.add_parser("audit")
     q.add_argument("--cases", required=True)
     q.add_argument("--out", required=True)
@@ -124,6 +129,10 @@ def main():
         from cube_research.cohort import screen
 
         return int(not screen(cfg, rules, args.cases, args.out, args.batch))
+    elif args.command == "perturb-e0":
+        from cube_research.perturbations import run_grid
+
+        return int(not run_grid(cfg, args.cases, args.cohort, args.out))
     elif args.command == "run":
         from cube_research.experiments import run
 
@@ -131,6 +140,8 @@ def main():
             raise ValueError("--limit must be positive")
         if args.cohort and args.stage in ("e0", "e1"):
             args.limit = 1
+        if args.cohort_position is not None and not (args.cohort and args.stage == "e0"):
+            raise ValueError("--cohort-position is only for cohort E0")
         if args.paired_e0 and not (args.cohort and args.stage == "e1"):
             raise ValueError("--paired-e0 is only for cohort E1")
         if args.smoke:
@@ -164,6 +175,7 @@ def main():
                 args.case_id,
                 args.cohort,
                 args.paired_e0,
+                cohort_position=args.cohort_position,
             )
         )
     elif args.command == "audit":

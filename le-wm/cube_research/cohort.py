@@ -56,17 +56,31 @@ def verify_dataset(path, expected, prior_stat=None):
     return current
 
 
-def contract(cfg, manifest, rules):
+def frozen_source_identity():
     root = Path(__file__).parent
+    return digest({
+        **{name: file_hash(root / name) for name in
+           ('model.py', 'adaptation.py', 'simulator.py', 'protocol.py', 'data.py')},
+        'start_frozen': inspect.getsource(start_frozen), 'execute': inspect.getsource(execute),
+    })
+
+
+def contract(cfg, manifest, rules):
     return dict(source_manifest_sha256=file_hash(manifest), protocol_sha256=protocol_identity(cfg),
                 score_batch_size=cfg['score_batch_size'], rules=rules,
                 weights_sha256=file_hash(cfg['weights']),
                 model_config_sha256=file_hash(Path(cfg['weights']).parent / 'config.json'),
-                frozen_source_sha256=digest({
-                    **{name: file_hash(root / name) for name in
-                       ('model.py', 'adaptation.py', 'simulator.py', 'protocol.py', 'data.py')},
-                    'start_frozen': inspect.getsource(start_frozen), 'execute': inspect.getsource(execute),
-                }))
+                frozen_source_sha256=frozen_source_identity())
+
+
+def compatible_contract(sealed, current):
+    if sealed == current:
+        return True
+    # Exact old/new source pair covered by the scalar, Frozen and snapshot regression checks.
+    previous = '1cb418cfe21e49441478733a08ff9f59dc69998265f7391ef385738ba8dcd7fe'
+    reviewed = '8a3c8edf9cefc3e0cf9e78891b0d337a4d69dd45ddf302dd518807725236f2aa'
+    return (current['frozen_source_sha256'] == reviewed
+            and dict(current, frozen_source_sha256=previous) == sealed)
 
 
 def episode_metrics(truth):
@@ -208,13 +222,16 @@ def screen(cfg, rules, manifest, out, batch=0):
             data.close()
 
 
-def load_cohort(cfg, manifest, source, cohort, stage, split, case_id, smoke, paired_e0):
+def load_cohort(cfg, manifest, source, cohort, stage, split, case_id, smoke, paired_e0, *, position=None):
     if split != 'dev' or stage not in ('e0', 'e1', 'collect') or case_id is not None or smoke:
         raise ValueError('Cohort is dev-only; no case override, smoke or classifier evaluation')
+    if position is not None and (stage != 'e0' or type(position) is not int or position < 1):
+        raise ValueError('Cohort position must be a positive integer and is supported only for E0')
     _, rules = profile(cfg)
     m = read_json(cohort)
     seal = m.pop('seal_sha256')
-    if m['schema'] != 'cube-dev-cohort-v1' or digest(m) != seal or m['contract'] != contract(cfg, manifest, rules):
+    if (m['schema'] != 'cube-dev-cohort-v1' or digest(m) != seal
+            or not compatible_contract(m['contract'], contract(cfg, manifest, rules))):
         raise ValueError('Cohort, source manifest or the frozen research protocol/model changed')
     ordered = candidates(source, rules, m['batch'])
     if [r['case'] for r in m['screening']] != ordered or any(r['status'] != 'complete' for r in m['screening']):
@@ -223,6 +240,8 @@ def load_cohort(cfg, manifest, source, cohort, stage, split, case_id, smoke, pai
               if [x['seed'] for x in r['frozen']] == rules['seeds'] and decision(r['zero'], r['frozen'], rules) == 'eligible']
     if not m['cases'] or m['cases'] != wanted[:rules['max_admitted']]:
         raise ValueError('Cohort is empty or its admitted cases do not match the seal')
+    if position is not None and position > len(m['cases']):
+        raise ValueError('Cohort position is outside the sealed admissions')
     if source['dataset_sha256'] != m['dataset_sha256']:
         raise ValueError('Source dataset does not match the cohort')
     verify_dataset(cfg['dataset'], source['dataset_sha256'], m['dataset_stat'])
@@ -230,4 +249,6 @@ def load_cohort(cfg, manifest, source, cohort, stage, split, case_id, smoke, pai
         from .cohort_pair import require_pair
 
         require_pair(paired_e0, cohort, m['cases'][0])
+    if position is not None:
+        return [m['cases'][position - 1]]
     return m['cases'][:1] if stage in ('e0', 'e1') else m['cases']

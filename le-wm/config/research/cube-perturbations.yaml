@@ -1,0 +1,12 @@
+experiment_protocol: cube-dev-perturbation-grid-v1
+cohort_cases: [f98411fee6571747, cba4e92adcb900f3]
+planning_seed: 142
+interface_parameterization: xyz
+variants:
+  - {perturbation_id: N, condition: N, perturbation_family: identity, xyz_gain: [1, 1, 1], pad_friction_scale: 1}
+  - {perturbation_id: I_uniform_0.6, condition: I, perturbation_family: xyz_uniform, xyz_gain: [0.6, 0.6, 0.6], pad_friction_scale: 1}
+  - {perturbation_id: I_uniform_0.4, condition: I, perturbation_family: xyz_uniform, xyz_gain: [0.4, 0.4, 0.4], pad_friction_scale: 1}
+  - {perturbation_id: I_z_0.6, condition: I, perturbation_family: xyz_z_only, xyz_gain: [1, 1, 0.6], pad_friction_scale: 1}
+  - {perturbation_id: I_z_0.4, condition: I, perturbation_family: xyz_z_only, xyz_gain: [1, 1, 0.4], pad_friction_scale: 1}
+  - {perturbation_id: D_pad_0.3, condition: D, perturbation_family: pad_sliding, xyz_gain: [1, 1, 1], pad_friction_scale: 0.3}
+  - {perturbation_id: D_pad_0.1, condition: D, perturbation_family: pad_sliding, xyz_gain: [1, 1, 1], pad_friction_scale: 0.1}

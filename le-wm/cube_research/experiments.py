@@ -185,6 +185,10 @@ def run(
     case_id=None,
     cohort=None,
     paired_e0=None,
+    *,
+    cohort_position=None,
+    perturbations=None,
+    extension_seal=None,
 ):
     from .model import FrozenModel, Planner
     from .simulator import make_env
@@ -206,11 +210,20 @@ def run(
             smoke=smoke,
             manifest=str(manifest),
             cohort=str(cohort) if cohort else None,
+            cohort_position=cohort_position,
             paired_e0=str(paired_e0) if paired_e0 else None,
             runtime=runtime_metadata(),
         ),
     )
     try:
+        if perturbations and not (cohort and stage == "e0" and extension_seal):
+            raise ValueError("Perturbation grid requires sealed cohort E0")
+        base_cfg = dict(cfg)
+        variants = [(p["condition"], p) for p in perturbations] if perturbations else [
+            (c, {}) for c in CONDITIONS
+        ]
+        if cohort_position is not None and not (cohort and stage == "e0"):
+            raise ValueError("Cohort position is only for cohort E0")
         local_inputs(cfg)
         m = read_json(manifest)
         validate_manifest(m)
@@ -221,7 +234,11 @@ def run(
         if cohort:
             from .cohort import load_cohort
 
-            selected_cases = load_cohort(cfg, manifest, m, cohort, stage, split, case_id, smoke, paired_e0)
+            source_cfg = ({k: v for k, v in cfg.items()
+                           if k not in ('interface_parameterization', 'experiment_protocol')}
+                          if perturbations else cfg)
+            selected_cases = load_cohort(source_cfg, manifest, m, cohort, stage, split, case_id, smoke,
+                                         paired_e0, position=cohort_position)
         elif m["dataset_sha256"] != file_hash(cfg["dataset"]):
             raise ValueError("Dataset content changed after split/stats freezing")
         if split == "test":
@@ -277,18 +294,23 @@ def run(
                 strategy=s,
                 extra_budget=b,
                 method=method,
+                **{k: v for k, v in variant.items() if k != "condition"},
             )
             for c in cases
             for seed in cfg["planning_seeds"]
-            for cond in CONDITIONS
+            for cond, variant in variants
             for s, b in strategies
             for method in methods
         ]
         write_json(root / "plan.json", plan)
         meta = provenance(cfg, manifest)
         meta.update(stage=stage, split=split, smoke=smoke, case_count=len(cases))
+        if perturbations:
+            meta.update(extension_seal=extension_seal, experiment_protocol=cfg["experiment_protocol"])
         if cohort:
             meta.update(cohort_sha256=file_hash(cohort), cohort_scope="selected dev only")
+            if stage == "e0":
+                meta["cohort_position"] = 1 if cohort_position is None else cohort_position
         if diagnostic_path:
             meta["diagnostic_sha256"] = file_hash(Path(diagnostic_path) / "diagnostic.npz")
             meta["diagnostic_metadata"] = read_json(Path(diagnostic_path) / "metadata.json")
@@ -300,13 +322,17 @@ def run(
             for case in cases:
                 initial, target, goal = data.case(case)
                 for seed in cfg["planning_seeds"]:
-                    for condition in CONDITIONS:
+                    for condition, variant in variants:
+                        variant_fields = {k: v for k, v in variant.items() if k != "condition"}
+                        key = variant.get("perturbation_id", condition)
                         harness = None
                         history = truth = None
                         prefix_ledger = None
                         try:
+                            env_cfg = dict(base_cfg, interface_scale=variant["xyz_gain"],
+                                           friction_scale=variant["pad_friction_scale"]) if variant else cfg
                             harness = make_env(
-                                cfg,
+                                env_cfg,
                                 condition,
                                 derived_seed(cfg["environment_seed"], case["case_id"]),
                                 initial,
@@ -328,15 +354,21 @@ def run(
                                 "normal_history",
                                 goal_z,
                             )
+                            if variant:
+                                from .cohort_pair import assert_commands
+
+                                assert_commands(history.actions, truth, variant["xyz_gain"])
                             # Snapshot contains controller, physics, random streams and
                             # prefix action buffer; restore it before EVERY strategy.
                             prefix_seconds = time.perf_counter() - prefix_started
                             snap = harness.snapshot(prefix_planner)
                             rng_state = copy.deepcopy(prefix_planner.rng.bit_generator.state) if cohort else None
                             check_actions = np.array([[0.02, 0, 0, 0, 0], [0, 0.02, 0, 0, 0]])
+                            check_started = time.perf_counter()
                             check = harness.replay_check(
                                 check_actions, prefix_ledger, prefix_planner
                             )
+                            prefix_check_seconds = time.perf_counter() - check_started
                             for strategy, budget in strategies:
                                 episode_started = time.perf_counter()
                                 harness.restore(snap, prefix_planner)
@@ -390,7 +422,7 @@ def run(
                                         "continue_task",
                                         goal_z,
                                     )
-                                hid = digest([case["case_id"], condition, seed, strategy, budget])[
+                                hid = digest([case["case_id"], key, seed, strategy, budget])[
                                     :20
                                 ]
                                 hp = root / "histories" / hid
@@ -413,9 +445,12 @@ def run(
                                         ledger=asdict(ledger),
                                         restore_check=check,
                                         truth=harness.audit_model(),
+                                        **variant_fields,
                                     ),
                                 )
+                                check_started = time.perf_counter()
                                 branch_check = harness.replay_check(check_actions, ledger)
+                                snapshot_check_seconds = prefix_check_seconds + time.perf_counter() - check_started
                                 write_json(hp / "branch-replay.json", branch_check)
                                 recovery_snap = harness.snapshot()
                                 # Trusted local offline checkpoint, never passed to policy/diagnostic.
@@ -446,8 +481,11 @@ def run(
                                         split=split,
                                         history_sha256=h.fingerprint(),
                                         status="running",
+                                        **variant_fields,
                                     )
                                     rid = digest(row)[:20]
+                                    if variant:
+                                        row['snapshot_replay_seconds'] = snapshot_check_seconds
                                     rp = root / "recoveries" / rid
                                     rp.mkdir(parents=True)
                                     write_json(rp / "result.json", row)
@@ -532,6 +570,9 @@ def run(
                                         if not (rp / "evaluation.json").exists():
                                             write_json(rp / "evaluation.json", tt)
                                         failures.append(row)
+                                        if variant:
+                                            write_json(rp / "result.json", row, overwrite=True)
+                                            raise
                                     write_json(rp / "result.json", row, overwrite=True)
                         except Exception as exc:
                             failure = dict(
@@ -540,18 +581,21 @@ def run(
                                 planning_seed=seed,
                                 status="failed",
                                 reason=f"{type(exc).__name__}: {exc}",
+                                **variant_fields,
                             )
                             if history is not None and truth is not None:
                                 partial = (
-                                    root / "failed-prefix" / f"{case['case_id']}-{seed}-{condition}"
+                                    root / "failed-prefix" / f"{case['case_id']}-{seed}-{key}"
                                 )
                                 partial.mkdir(parents=True, exist_ok=True)
                                 save_history(partial, history, truth, goal)
                                 failure["ledger"] = asdict(prefix_ledger)
                             failures.append(failure)
                             write_json(
-                                root / f"failure-{case['case_id']}-{seed}-{condition}.json", failure
+                                root / f"failure-{case['case_id']}-{seed}-{key}.json", failure
                             )
+                            if variant:
+                                raise
                         finally:
                             if harness:
                                 actual_steps += getattr(harness, "actual_steps", 0)
@@ -561,7 +605,7 @@ def run(
                                 harness.close()
         finally:
             data.close()
-        if cohort and stage == "e0" and not failures and len(completed) == len(plan):
+        if cohort and stage == "e0" and not perturbations and not failures and len(completed) == len(plan):
             from .cohort_pair import verify_pair
 
             offline = verify_pair(cfg, m, cases[0], root)
@@ -583,6 +627,8 @@ def run(
             root,
             "failed",
             reason=f"{type(exc).__name__}: {exc}",
+            evaluator_actual_environment_steps=actual_steps,
+            offline_replay_steps=actual_offline_steps,
             wall_seconds=time.perf_counter() - started,
         )
         raise

@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 
@@ -13,13 +14,45 @@ def contact_friction(traj, model):
     expected = {tuple(sorted((p['geom1'], p['geom2']))): p['friction'] for p in model['pairs']}
     contacts = [c for t in traj[1:] for c in t['contacts']]
     loaded = sum(float(c['force'][0]) > 1e-6 for c in contacts)
+    matches = all(tuple(sorted(c['geoms'])) in expected
+                  and np.allclose(c['friction'], expected[tuple(sorted(c['geoms']))]) for c in contacts)
     return dict(contacts=len(contacts), loaded_contacts=loaded,
-                verified=bool(loaded and all(tuple(sorted(c['geoms'])) in expected
-                        and np.allclose(c['friction'], expected[tuple(sorted(c['geoms']))]) for c in contacts)))
+                coefficients_match=matches, verified=bool(loaded and matches))
 
 
 def position_delta(a, b, key):
     return float(np.max(np.abs(np.array([r[key] for r in a]) - np.array([r[key] for r in b]))))
+
+
+def assert_commands(commands, trajectory, gain):
+    if any(not np.array_equal(t['applied_action'], transform_command(a, gain))
+           for t, a in zip(trajectory[1:], commands, strict=True)):
+        raise ValueError('Actual action disagrees with the locked interface')
+
+
+def replay_matched(cfg, condition, case, initial, target, commands, path):
+    from .simulator import make_env
+
+    started = perf_counter()
+    ledger, env, traj, model = Ledger(len(commands)), None, [], None
+    status = 'unfinished'
+    try:
+        env = make_env(cfg, condition, derived_seed(cfg['environment_seed'], case['case_id']), initial, target)
+        model = env.audit_model()
+        traj.append(env.evaluate())
+        for a in commands:
+            if traj[-1]['truncated']:
+                raise RuntimeError('Matched-command audit truncated before all commands')
+            _, t = env.step(a, ledger, 'offline_matched_command')
+            traj.append(t)
+        assert_commands(commands, traj, cfg['interface_scale'] if condition == 'I' else 1)
+        status = 'complete'
+    finally:
+        if env is not None:
+            env.close()
+        write_json(path, dict(status=status, model=model, trajectory=traj, ledger=asdict(ledger),
+                              wall_seconds=perf_counter()-started, role='offline_audit_only'))
+    return traj, model, ledger.used
 
 
 def e1_gate(rows, interface, dynamics, history_steps):
@@ -33,7 +66,6 @@ def e1_gate(rows, interface, dynamics, history_steps):
 def verify_pair(cfg, manifest, case, root):
     from .cohort import episode_metrics
     from .data import Dataset
-    from .simulator import make_env
 
     cid = case['case_id']
     rows, online, commands = {}, {}, {}
@@ -46,9 +78,7 @@ def verify_pair(cfg, manifest, case, root):
         online[c] = read_json(p.parent / 'evaluation.json')
         with np.load(p.parent / 'allowed.npz', allow_pickle=False) as log:
             commands[c] = log['commands']
-        if any(not np.array_equal(t['applied_action'], transform_command(a, cfg['interface_scale'] if c == 'I' else 1))
-               for t, a in zip(online[c][1:], commands[c], strict=True)):
-            raise ValueError(f'{c}: actual action disagrees with the locked interface')
+        assert_commands(commands[c], online[c], cfg['interface_scale'] if c == 'I' else 1)
     if set(rows) != set(CONDITIONS) or len({r['planning_seed'] for r in rows.values()}) != 1:
         raise ValueError('Expected one paired case and planning seed across N/I/D')
     counts = 0
@@ -67,26 +97,9 @@ def verify_pair(cfg, manifest, case, root):
         trails, models = {}, {}
         for name, condition, friction in [('N', 'N', 1.0), ('I', 'I', 1.0),
                                           ('D_identity', 'D', 1.0), ('D', 'D', cfg['friction_scale'])]:
-            ledger = Ledger(len(matched))
-            env = make_env(dict(cfg, friction_scale=friction), condition,
-                           derived_seed(cfg['environment_seed'], cid), initial, target)
-            traj = []
-            status = 'unfinished'
-            try:
-                models[name] = env.audit_model()
-                traj.append(env.evaluate())
-                for a in matched:
-                    if traj[-1]['truncated']:
-                        raise RuntimeError('Matched-command audit truncated before all commands')
-                    _, t = env.step(a, ledger, 'offline_matched_command')
-                    traj.append(t)
-                trails[name] = traj
-                status = 'complete'
-            finally:
-                counts += ledger.used
-                write_json(dest / f'{name}.json', dict(status=status, model=models.get(name),
-                           trajectory=traj, ledger=asdict(ledger), role='offline_audit_only'))
-                env.close()
+            trails[name], models[name], used = replay_matched(
+                dict(cfg, friction_scale=friction), condition, case, initial, target, matched, dest / f'{name}.json')
+            counts += used
         interface_command = position_delta(trails['N'][1:], trails['I'][1:], 'applied_action')
         interface_response = position_delta(trails['N'], trails['I'], 'effector_pos')
         identity = position_delta(trails['N'], trails['D_identity'], 'object_pos')

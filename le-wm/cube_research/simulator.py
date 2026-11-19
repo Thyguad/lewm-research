@@ -187,6 +187,8 @@ class Harness:
                 )
                 for n in (*PAD_NAMES, "object_0")
             ],
+            floor=dict(friction=m.geom("floor").friction.tolist(),
+                       priority=int(m.geom_priority[m.geom("floor").id])),
             pairs=[
                 dict(
                     geom1=m.geom(int(m.pair_geom1[i])).name,
@@ -231,7 +233,7 @@ class Harness:
                 for k in ("geom_friction", "geom_priority", "pair_friction", "geom_rgba")
             },
             steps=self.steps,
-            scale=self.scale,
+            scale=copy.deepcopy(self.scale),
             condition=self.condition,
             planner=None
             if planner is None
@@ -254,7 +256,8 @@ class Harness:
         restore_space(e.variation_space, snap["variation"])
         random.setstate(snap["py_rng"])
         np.random.set_state(snap["np_rng"])
-        self.steps, self.scale, self.condition = snap["steps"], snap["scale"], snap["condition"]
+        self.steps, self.condition = snap["steps"], snap["condition"]
+        self.scale = copy.deepcopy(snap["scale"])
         if snap["planner"] is not None:
             if planner is None:
                 raise ValueError("Snapshot includes a planner; restore it explicitly")

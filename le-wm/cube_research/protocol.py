@@ -78,6 +78,8 @@ def validate_config(c):
         raise ValueError("Invalid planning seed")
     if c["render_backend"] not in ("auto", "egl", "osmesa", "glfw"):
         raise ValueError("Unsupported MuJoCo rendering backend")
+    if c.get("interface_parameterization", "scalar") not in ("scalar", "xyz"):
+        raise ValueError("Unsupported interface parameterization")
 
 
 def transform_command(command, scale=1.0):
@@ -87,10 +89,12 @@ def transform_command(command, scale=1.0):
     Statistical dataset standardization belongs only to model input.
     """
     a = np.asarray(command, dtype=np.float64)
-    if a.shape[-1:] != (5,) or not np.isfinite(a).all() or not np.isfinite(scale) or scale <= 0:
+    gain = np.asarray(scale, dtype=np.float64)
+    if (a.shape[-1:] != (5,) or not np.isfinite(a).all() or gain.shape not in ((), (3,))
+            or not np.isfinite(gain).all() or np.any(gain <= 0)):
         raise ValueError("Expected finite five-dimensional actions and positive scale")
     out = np.clip(a, -1, 1).copy()
-    out[..., :3] = np.clip(out[..., :3] * scale, -1, 1)
+    out[..., :3] = np.clip(out[..., :3] * gain, -1, 1)
     return out
 
 
@@ -250,4 +254,7 @@ POLICY_KEYS = (
 
 def policy_config(cfg):
     """Remove evaluator truth, data paths, splits and condition before algorithms."""
-    return {k: cfg[k] for k in POLICY_KEYS}
+    out = {k: cfg[k] for k in POLICY_KEYS}
+    if "interface_parameterization" in cfg:
+        out["interface_parameterization"] = cfg["interface_parameterization"]
+    return out

@@ -60,6 +60,15 @@ def test_dev_order_and_seal_enforced(tmp_path):
     seal = tmp_path / 'cohort.json'
     write_json(seal, dict(payload, seal_sha256=digest(payload)))
     assert cohort.load_cohort(cfg, path, source, seal, 'e0', 'dev', None, False, None) == selected[:1]
+    for position in (1, 2, 3):
+        assert cohort.load_cohort(cfg, path, source, seal, 'e0', 'dev', None, False, None,
+                                  position=position) == [selected[position - 1]]
+    with pytest.raises(ValueError, match='outside the sealed admissions'):
+        cohort.load_cohort(cfg, path, source, seal, 'e0', 'dev', None, False, None, position=4)
+    with pytest.raises(ValueError, match='positive integer'):
+        cohort.load_cohort(cfg, path, source, seal, 'e0', 'dev', None, False, None, position=0)
+    with pytest.raises(ValueError, match='only for E0'):
+        cohort.load_cohort(cfg, path, source, seal, 'e1', 'dev', None, False, None, position=2)
     assert cohort.load_cohort(cfg, path, source, seal, 'collect', 'dev', None, False, None) == selected[:3]
     assert file_hash(path) == original and read_json(path) == source
     with pytest.raises(ValueError, match='no case override'):
