@@ -1,0 +1,38 @@
+protocol: cube-single-expert-segment-v1
+# Paths are explicit local files. No command in this pipeline downloads inputs.
+dataset: null
+weights: null
+output_root: runs/cube
+model_source: quentinll/lewm-cube
+dataset_source: ogbench/cube_single_expert
+device: auto
+render_backend: auto
+sensors: rgb
+image_size: 224
+action_dim: 5
+action_block: 5
+goal_offset: 25
+total_steps: 50
+history_steps: 10
+extra_budgets: [0, 5, 10, 20]
+horizon: 5
+execute_blocks: 1
+cem_samples: 30
+cem_iterations: 2
+cem_elites: 5
+score_batch_size: 8
+adapt_steps: 20
+adapt_search_radius: 0.35
+adapt_regularization: 0.01
+residual_rank: 4
+interface_scale: 0.6
+friction_scale: 0.3
+# Provisional development settings; not empirically selected values.
+fixed_probe: lift_cycle
+probe_amplitude: 0.15
+environment_seed: 1234
+split_seed: 20261119
+planning_seeds: [42]
+probe_seed: 314
+adapt_seed: 2718
+bootstrap_seed: 99
