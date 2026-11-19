@@ -43,11 +43,6 @@ def parser():
     q.add_argument("--cases", required=True)
     q.add_argument("--cohort", required=True)
     q.add_argument("--out", required=True)
-    q = sub.add_parser("perturb-e1", help="fixed step-25 recovery comparison against a sealed E0 failure")
-    q.add_argument("--cases", required=True)
-    q.add_argument("--cohort", required=True)
-    q.add_argument("--paired-e0", required=True)
-    q.add_argument("--out", required=True)
     q = sub.add_parser("audit")
     q.add_argument("--cases", required=True)
     q.add_argument("--out", required=True)
@@ -138,10 +133,6 @@ def main():
         from cube_research.perturbations import run_grid
 
         return int(not run_grid(cfg, args.cases, args.cohort, args.out))
-    elif args.command == "perturb-e1":
-        from cube_research.perturbation_recovery import run_recovery
-
-        return int(not run_recovery(cfg, args.cases, args.cohort, args.paired_e0, args.out))
     elif args.command == "run":
         from cube_research.experiments import run
 

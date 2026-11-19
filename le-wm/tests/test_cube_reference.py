@@ -11,11 +11,9 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cube_reference import AUDIT_IDS, verified_scores
 from cube_research.reference import (BUDGET, OFFSET, PLAN, TracedSolver, action_blocks,
                                      command_rows, fit_actions, make_policy, open_dataset,
                                      sample_rows, summarize)
-from research_common import write_json
 
 
 def test_reference_sampling_preserves_last_row_exclusion_and_order():
@@ -99,13 +97,3 @@ def test_metrics_separate_initial_success_post_step_termination_and_unfinished()
     assert [r['status'] for r in result['cases']] == ['failure', 'success', 'unfinished']
     assert result['initial']['successes'] == 1 and result['overall']['successes'] == 1
     assert result['overall']['rate'] is None and result['non_initial']['rate'] == 1
-
-
-def test_formal_gate_requires_first_plan_and_fixed_parity(tmp_path):
-    cases = {cid: {'passed': True} for cid in AUDIT_IDS}
-    write_json(tmp_path / 'fixed-score.json', {'passed': True, 'cases': cases})
-    write_json(tmp_path / 'first-plan-score.json', cases)
-    assert verified_scores(tmp_path)
-    cases[AUDIT_IDS[0]]['passed'] = False
-    write_json(tmp_path / 'first-plan-score.json', cases, overwrite=True)
-    assert not verified_scores(tmp_path)

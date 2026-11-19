@@ -1,3 +1,4 @@
+> Upstream model documentation. For this workspace’s current research scope and entry points, start with the [root README](../README.md).
 
 # LeWorldModel
 ### Stable End-to-End Joint-Embedding Predictive Architecture from Pixels
