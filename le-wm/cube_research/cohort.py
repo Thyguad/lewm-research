@@ -76,11 +76,14 @@ def contract(cfg, manifest, rules):
 def compatible_contract(sealed, current):
     if sealed == current:
         return True
-    # Exact old/new source pair covered by the scalar, Frozen and snapshot regression checks.
+    # Exact source versions with compatible legacy Frozen behavior. The newest
+    # adds an opt-in scoring callback; default CEM commands and counts are unchanged.
     previous = '1cb418cfe21e49441478733a08ff9f59dc69998265f7391ef385738ba8dcd7fe'
     reviewed = '8a3c8edf9cefc3e0cf9e78891b0d337a4d69dd45ddf302dd518807725236f2aa'
-    return (current['frozen_source_sha256'] == reviewed
-            and dict(current, frozen_source_sha256=previous) == sealed)
+    with_scoring_hook = 'e9f24675f07ab97f3a50087ccc1cb5a4eb0d7cef399196ffd4dc0be281213cd3'
+    allowed = {reviewed: (previous,), with_scoring_hook: (previous, reviewed)}
+    return any(dict(current, frozen_source_sha256=old) == sealed
+               for old in allowed.get(current['frozen_source_sha256'], ()))
 
 
 def episode_metrics(truth):

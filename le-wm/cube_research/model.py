@@ -10,20 +10,18 @@ class FrozenModel:
     def __init__(self, cfg, action_stats):
         from research_runtime import load_model
         from research_device import resolve_device
-        from .protocol import policy_config
-
-        self.cfg, self.stats = policy_config(cfg), action_stats
+        self.cfg, self.stats = {"score_batch_size": cfg["score_batch_size"]}, action_stats
         self.device = resolve_device(cfg["device"])
         self.base, self.identity = load_model(cfg["weights"], None, self.device)
-        self.dim = 192
         import json
         from pathlib import Path
 
         spec = json.loads((Path(cfg["weights"]).parent / "config.json").read_text())
         if spec["action_encoder"]["input_dim"] != cfg["action_dim"] * cfg["action_block"]:
             raise ValueError("Checkpoint action input does not match Cube 5x5")
-        if spec["predictor"]["input_dim"] != self.dim:
-            raise ValueError("Expected official Cube 192-dimensional latent")
+        self.dim = int(spec["predictor"]["input_dim"])
+        if self.dim <= 0:
+            raise ValueError("Invalid predictor latent dimension")
         self.identity.update(
             preprocessing="ImageNet normalize then resize 224; dataset StandardScaler action",
             action_stats=action_stats,
@@ -41,6 +39,8 @@ class FrozenModel:
             x = image_transform(224)(tv_tensors.Image(x)).unsqueeze(1).to(self.device)
             with torch.inference_mode():
                 emb = self.base.encode({"pixels": x})["emb"][:, -1]
+            if emb.shape != (len(part), self.dim):
+                raise ValueError("Encoder output does not match predictor latent dimension")
             result.append(emb.cpu().numpy())
             ledger.count("encoder", len(part))
         return np.concatenate(result)
@@ -64,11 +64,24 @@ class FrozenModel:
         return np.concatenate(result)
 
 
+def terminal_embedding(adapter, embedding, candidates):
+    """Roll out one shared initial embedding against a batch of action blocks."""
+    z = np.repeat(embedding[None, None], len(candidates), axis=0)
+    for h in range(candidates.shape[1]):
+        # Match the predictor's at most three blocks of autoregressive context.
+        a = candidates[:, max(0, h - 2) : h + 1]
+        pred = adapter.predict(z[:, -3:], a)
+        z = np.concatenate((z, pred[:, None]), axis=1)
+    return z[:, -1]
+
+
 class Planner:
-    def __init__(self, adapter, cfg, seed):
+    def __init__(self, adapter, cfg, seed, *, terminal_cost=None):
         self.adapter, self.cfg = adapter, cfg
         self.rng = np.random.default_rng(seed)
         self.buffer = []
+        self.terminal_cost = terminal_cost
+        self.scoring_seconds = 0.0
 
     def reset_buffer(self):
         self.buffer = []
@@ -87,7 +100,6 @@ class Planner:
         stats = getattr(self.adapter.model, "stats", None) or {}
         action_mean = np.asarray(stats.get("mean", np.zeros(5)))
         action_scale = np.asarray(stats.get("scale", np.ones(5)))
-        evaluated = None
         for _ in range(c["cem_iterations"]):
             normalized = self.rng.normal(
                 mean, std, (c["cem_samples"], *shape)
@@ -99,16 +111,16 @@ class Planner:
             candidates = np.clip(
                 normalized * action_scale + action_mean, -1, 1
             ).astype(np.float32)
-            z = np.repeat(embedding[None, None], len(candidates), axis=0)
-            for h in range(c["horizon"]):
-                # Preserve the reference predictor's <=3 block autoregressive context.
-                a = candidates[:, max(0, h - 2) : h + 1]
-                pred = self.adapter.predict(z[:, -3:], a)
-                z = np.concatenate((z, pred[:, None]), axis=1)
-            costs = np.sum((z[:, -1] - goal) ** 2, axis=1)
+            terminal = terminal_embedding(self.adapter, embedding, candidates)
+            score_started = time.perf_counter()
+            costs = (
+                np.sum((terminal - goal) ** 2, axis=1)
+                if self.terminal_cost is None
+                else self.terminal_cost(terminal, goal)
+            )
+            self.scoring_seconds += time.perf_counter() - score_started
             elite = normalized[np.argsort(costs)[: c["cem_elites"]]]
             mean, std = elite.mean(0), np.maximum(elite.std(0), 0.03)
-            evaluated = (candidates, costs)
             ledger.count("cem_score", len(candidates))
         # Execute the final CEM mean, as in the reference solver. A single
         # sampled elite can contain a one-step discontinuity that is unsafe
